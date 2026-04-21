@@ -3247,13 +3247,7 @@ function SwipePanel<T>({
                 : "pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[28px] px-0.5 sm:px-1"
             }
           >
-            <div
-              className={
-                fillHeight
-                  ? "h-full min-h-0 origin-[center_92%] scale-[0.96] opacity-[0.48] transition-[transform,opacity] duration-150 ease-out"
-                  : "flex h-full min-h-0 origin-[center_92%] scale-[0.96] items-stretch justify-center opacity-[0.48] transition-[transform,opacity] duration-150 ease-out"
-              }
-            >
+            <div className={fillHeight ? "h-full min-h-0" : "flex h-full min-h-0 items-stretch justify-center"}>
               {renderCard(nextItem)}
             </div>
           </div>
@@ -3298,7 +3292,7 @@ function SwipePanel<T>({
             transition: "none",
           }}
         >
-          <div className={`relative h-full origin-[center_92%] ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
+          <div className={`relative h-full ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
             {Math.abs(dragX) > 18 ? (
               <div
                 className={`absolute left-3 top-3 z-20 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] sm:left-4 sm:top-4 sm:px-4 sm:py-2 sm:text-xs ${
