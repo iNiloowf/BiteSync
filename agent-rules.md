@@ -1,0 +1,22 @@
+# Agent rules (BiteSync / food-match-web)
+
+Instructions for the coding agent when working in this repository.
+
+## Git: when the user says “push kon” (or “push”)
+
+1. Stage the relevant changes (`git add`).
+2. Create a commit with a clear message describing what changed.
+3. Push to the configured remote (e.g. `git push origin master` or the current branch).
+4. Ensure the branch is in sync with the remote (pull/rebase if needed, then push again if required).
+
+## User-action items in chat
+
+Whenever something **must be done by the user** (manual steps in GitHub, Vercel, Supabase, browser, secrets, billing, etc.), state those steps clearly and mark them in **red** in the assistant reply, for example:
+
+`<span style="color:#dc2626">You need to …</span>`
+
+(Use a short red HTML span so it stands out in markdown-capable UIs.)
+
+## Language
+
+Always answer the user **in English**, even if they write in another language.

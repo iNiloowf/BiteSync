@@ -847,6 +847,7 @@ export function FoodMatchApp() {
         <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#141117]/92 shadow-[0_24px_100px_rgba(0,0,0,0.45)] backdrop-blur-xl">
           <AppHeader
             profile={profile}
+            email={email}
             screen={screen}
             menuOpen={menuOpen}
             menuRef={menuRef}
@@ -969,6 +970,7 @@ export function FoodMatchApp() {
 
 function AppHeader({
   profile,
+  email,
   screen,
   menuOpen,
   menuRef,
@@ -977,6 +979,7 @@ function AppHeader({
   onSignOut,
 }: {
   profile: Profile | null;
+  email: string;
   screen: Screen;
   menuOpen: boolean;
   menuRef: React.RefObject<HTMLDivElement | null>;
@@ -1001,31 +1004,44 @@ function AppHeader({
       </div>
 
       {profile ? (
-        <div className="relative" ref={menuRef}>
-          <button
-            onClick={onToggleMenu}
-            className="h-11 w-11 overflow-hidden rounded-full border border-white/12 bg-white/10"
-          >
-            {profile.avatar_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={profile.avatar_url} alt={profile.full_name} className="h-full w-full object-cover" />
-            ) : (
-              <div className="grid h-full w-full place-items-center text-sm font-semibold text-white">
-                {getInitials(profile.full_name)}
-              </div>
-            )}
-          </button>
-
-          {menuOpen ? (
-            <div className="absolute right-0 top-14 z-20 w-44 rounded-2xl border border-white/10 bg-[#1b1720] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
-              <button onClick={onOpenProfile} className={menuItemClass}>
-                Profile
-              </button>
-              <button onClick={onSignOut} className={menuItemClass}>
-                Sign out
-              </button>
+        <div className="flex min-w-0 max-w-[62%] items-center gap-3 sm:max-w-[70%]" ref={menuRef}>
+          {screen !== "auth" ? (
+            <div className="min-w-0 flex-1 text-right">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Logged in as</p>
+              <p className="truncate text-sm font-semibold text-white">{profile.full_name}</p>
+              {email.trim() ? (
+                <p className="truncate text-xs text-white/45" title={email}>
+                  {email}
+                </p>
+              ) : null}
             </div>
           ) : null}
+          <div className="relative shrink-0">
+            <button
+              onClick={onToggleMenu}
+              className="h-11 w-11 overflow-hidden rounded-full border border-white/12 bg-white/10"
+            >
+              {profile.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={profile.avatar_url} alt={profile.full_name} className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-sm font-semibold text-white">
+                  {getInitials(profile.full_name)}
+                </div>
+              )}
+            </button>
+
+            {menuOpen ? (
+              <div className="absolute right-0 top-14 z-20 w-44 rounded-2xl border border-white/10 bg-[#1b1720] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
+                <button onClick={onOpenProfile} className={menuItemClass}>
+                  Profile
+                </button>
+                <button onClick={onSignOut} className={menuItemClass}>
+                  Sign out
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -1367,11 +1383,6 @@ function RoomScreen({
       </div>
 
       <div className="space-y-3">
-        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-          <p className="text-sm text-white/55">Logged in as</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{profile?.full_name}</p>
-        </div>
-
         <div className="min-h-0 grid flex-1 gap-3 overflow-y-auto">
           <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
             <p className="text-sm text-white/55">People in this room</p>
