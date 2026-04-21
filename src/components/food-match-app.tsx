@@ -847,7 +847,6 @@ export function FoodMatchApp() {
         <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#141117]/92 shadow-[0_24px_100px_rgba(0,0,0,0.45)] backdrop-blur-xl">
           <AppHeader
             profile={profile}
-            email={email}
             screen={screen}
             menuOpen={menuOpen}
             menuRef={menuRef}
@@ -970,7 +969,6 @@ export function FoodMatchApp() {
 
 function AppHeader({
   profile,
-  email,
   screen,
   menuOpen,
   menuRef,
@@ -979,7 +977,6 @@ function AppHeader({
   onSignOut,
 }: {
   profile: Profile | null;
-  email: string;
   screen: Screen;
   menuOpen: boolean;
   menuRef: React.RefObject<HTMLDivElement | null>;
@@ -1006,15 +1003,7 @@ function AppHeader({
       {profile ? (
         <div className="flex min-w-0 max-w-[62%] items-center gap-3 sm:max-w-[70%]" ref={menuRef}>
           {screen !== "auth" ? (
-            <div className="min-w-0 flex-1 text-right">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Logged in as</p>
-              <p className="truncate text-sm font-semibold text-white">{profile.full_name}</p>
-              {email.trim() ? (
-                <p className="truncate text-xs text-white/45" title={email}>
-                  {email}
-                </p>
-              ) : null}
-            </div>
+            <p className="min-w-0 flex-1 truncate text-right text-sm font-semibold text-white">{profile.full_name}</p>
           ) : null}
           <div className="relative shrink-0">
             <button
@@ -1372,11 +1361,11 @@ function RoomScreen({
         </span>
       </div>
 
-      <div className="rounded-[30px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
-        <div className="rounded-[29px] bg-[#161218] p-5">
-          <p className="text-sm text-white/55">{mode === "host" ? "Your room is live" : "You are inside the room"}</p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-[0.16em] text-white">{room?.code}</h1>
-          <p className="mt-4 text-sm text-white/58">
+      <div className="rounded-[24px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
+        <div className="rounded-[23px] bg-[#161218] px-4 py-3">
+          <p className="text-xs text-white/55">{mode === "host" ? "Your room is live" : "You are inside the room"}</p>
+          <h1 className="mt-1.5 text-3xl font-semibold tracking-[0.14em] text-white">{room?.code}</h1>
+          <p className="mt-1.5 text-xs text-white/58">
             {room?.city}, {room?.country_code}
           </p>
         </div>
@@ -1407,12 +1396,11 @@ function RoomScreen({
             </div>
 
             {stage === "lobby" ? (
-              <div className="mt-4 space-y-4">
-                <div className="rounded-2xl bg-white/6 p-4">
-                  <p className="text-lg font-semibold text-white">Start whenever you are ready.</p>
-                  <p className="mt-2 text-sm leading-6 text-white/58">
-                    You can start the category round even if nobody else has joined yet. If more people join later,
-                    BiteSync will use only the shared liked categories.
+              <div className="mt-4 space-y-3">
+                <div className="rounded-2xl bg-white/6 px-3 py-3">
+                  <p className="text-base font-semibold text-white">Start when you are ready.</p>
+                  <p className="mt-1.5 text-sm leading-snug text-white/58">
+                    You can begin categories solo; late joiners still share only mutual likes.
                   </p>
                 </div>
 
