@@ -1649,7 +1649,7 @@ export function FoodMatchApp() {
 
   useEffect(() => {
     if (roomStage !== "restaurants" || typeof window === "undefined") return;
-    for (const place of pendingRestaurantsRef.current.slice(1, 10)) {
+    for (const place of pendingRestaurantsRef.current.slice(0, 12)) {
       const url = place.photoUrls?.[0];
       if (!url) continue;
       const img = new window.Image();
@@ -2502,7 +2502,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   return (
     <>
       <div className="flex h-full min-h-[min(260px,48dvh)] w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
-        <div className="relative min-h-[min(140px,36dvh)] flex-1 overflow-hidden bg-black/35">
+        <div className="relative min-h-[min(140px,36dvh)] flex-1 overflow-hidden bg-[linear-gradient(180deg,#2a2230_0%,#1a1520_100%)]">
           {photos[0] ? (
             <button
               type="button"
@@ -2922,7 +2922,7 @@ function RoomScreen({
                 renderCard={(restaurant) => (
                   <RestaurantSwipeCard
                     restaurant={restaurant}
-                    heroImagePriority={restaurant.id === currentRestaurant.id ? "high" : "low"}
+                    heroImagePriority="high"
                     onHideForever={onHideRestaurantForever}
                   />
                 )}
@@ -3235,8 +3235,8 @@ function SwipePanel<T>({
       <div
         className={
           fillHeight
-            ? "relative min-h-[min(300px,52dvh)] flex-1 touch-none select-none"
-            : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-none select-none sm:h-[460px]"
+            ? "relative min-h-[min(300px,52dvh)] flex-1 touch-none select-none rounded-[28px] bg-[#161218]"
+            : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-none select-none rounded-[28px] bg-[#161218] sm:h-[460px]"
         }
       >
         {nextItem ? (
@@ -3298,10 +3298,7 @@ function SwipePanel<T>({
             transition: "none",
           }}
         >
-          <div
-            key={itemKey}
-            className={`bitesync-swipe-promote relative h-full origin-[center_92%] ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}
-          >
+          <div className={`relative h-full origin-[center_92%] ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
             {Math.abs(dragX) > 18 ? (
               <div
                 className={`absolute left-3 top-3 z-20 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] sm:left-4 sm:top-4 sm:px-4 sm:py-2 sm:text-xs ${
