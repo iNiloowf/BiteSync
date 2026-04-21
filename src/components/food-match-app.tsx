@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Session, User } from "@supabase/supabase-js";
+import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 
 import { categories, countries, type Category } from "@/data/mock-data";
 import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
@@ -321,12 +321,6 @@ export function FoodMatchApp() {
     return out;
   }, [myCategoryVotes]);
 
-  const matchedCategorySummary = useMemo(() => {
-    const ids = sharedCategoryIds.length > 0 ? sharedCategoryIds : soloLikedCategoryIds;
-    if (ids.length === 0) return "";
-    return ids.map((id) => categories.find((c) => c.id === id)?.title ?? id).join(" · ");
-  }, [sharedCategoryIds, soloLikedCategoryIds]);
-
   const diningPlacesFetchKey = useMemo(() => {
     if (!activeRoom) return "";
     if (roomStage !== "restaurants" && roomStage !== "final") {
@@ -454,7 +448,7 @@ export function FoodMatchApp() {
       setEmail(nextSession?.user.email ?? "");
       if (nextSession?.user) {
         await loadProfile(nextSession.user);
-        setScreen("home");
+        setScreen((current) => (current === "auth" ? "home" : current));
       } else {
         setScreen("auth");
       }
@@ -463,12 +457,14 @@ export function FoodMatchApp() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event: AuthChangeEvent, nextSession) => {
       setSession(nextSession);
       setEmail(nextSession?.user.email ?? "");
       if (nextSession?.user) {
         void loadProfile(nextSession.user);
-        setScreen("home");
+        if (event === "INITIAL_SESSION" || event === "SIGNED_IN") {
+          setScreen((current) => (current === "auth" ? "home" : current));
+        }
       } else {
         setProfile(null);
         setScreen("auth");
@@ -1164,14 +1160,12 @@ export function FoodMatchApp() {
                 restaurantVotes={restaurantVotes}
                 sharedCategoryIds={sharedCategoryIds}
                 cityRestaurants={visibleCityRestaurants}
-                restaurantCandidates={restaurantCandidates}
                 pendingCategories={pendingCategories}
                 pendingRestaurants={pendingRestaurants}
                 finalRestaurants={finalRestaurants}
                 restaurantsLoading={restaurantsLoading}
                 swipePickLabel={swipePickLabel}
                 myLikedCategoriesInVoteOrder={myLikedCategoriesInVoteOrder}
-                matchedCategorySummary={matchedCategorySummary}
                 onStart={() => setRoomStage("categories")}
                 onChangeStage={setRoomStage}
                 onCategoryDecision={handleCategoryDecision}
@@ -1534,14 +1528,12 @@ function RoomScreen({
   restaurantVotes,
   sharedCategoryIds,
   cityRestaurants,
-  restaurantCandidates,
   pendingCategories,
   pendingRestaurants,
   finalRestaurants,
   restaurantsLoading,
   swipePickLabel,
   myLikedCategoriesInVoteOrder,
-  matchedCategorySummary,
   onStart,
   onChangeStage,
   onCategoryDecision,
@@ -1556,14 +1548,12 @@ function RoomScreen({
   restaurantVotes: RoomRestaurantVote[];
   sharedCategoryIds: string[];
   cityRestaurants: CityRestaurant[];
-  restaurantCandidates: CityRestaurant[];
   pendingCategories: typeof categories;
   pendingRestaurants: CityRestaurant[];
   finalRestaurants: CityRestaurant[];
   restaurantsLoading: boolean;
   swipePickLabel: string;
   myLikedCategoriesInVoteOrder: Category[];
-  matchedCategorySummary: string;
   onStart: () => void;
   onChangeStage: (value: RoomStage) => void;
   onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
@@ -1594,25 +1584,20 @@ function RoomScreen({
   const swipeStages = (
     <>
       {stage === "categories" ? (
-        <div className="space-y-4">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-white/55">
-              Same as Tinder: <span className="text-white/75">swipe right = like</span>,{" "}
-              <span className="text-white/75">swipe left = pass</span>.
-            </p>
-            <span className="text-xs uppercase tracking-[0.2em] text-white/45">{pendingCategories.length} left</span>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
+            {pendingCategories.length} left
           </div>
 
           {myLikedCategoriesInVoteOrder.length > 0 ? (
-            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/8 px-3 py-3">
-              <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-100/70">Categories you liked</p>
-              <div className="mt-2 flex flex-wrap gap-2">
+            <div className="shrink-0 rounded-lg border border-emerald-400/15 bg-emerald-400/6 px-2 py-1">
+              <div className="flex max-h-6 items-center gap-1 overflow-x-auto overflow-y-hidden whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {myLikedCategoriesInVoteOrder.map((cat) => (
                   <span
                     key={cat.id}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/8 px-3 py-1.5 text-sm font-medium text-white"
+                    className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-white/8 px-1.5 py-0.5 text-[10px] font-medium text-white/85"
                   >
-                    <span>{cat.emoji}</span>
+                    <span className="text-[11px] leading-none">{cat.emoji}</span>
                     {cat.title}
                   </span>
                 ))}
@@ -1620,121 +1605,100 @@ function RoomScreen({
             </div>
           ) : null}
 
-          {currentCategory ? (
-            <SwipePanel
-              item={currentCategory}
-              nextItem={nextCategory}
-              likeLabel="Like"
-              skipLabel="Pass"
-              onLike={() => onCategoryDecision(currentCategory.id, "like")}
-              onSkip={() => onCategoryDecision(currentCategory.id, "skip")}
-              renderCard={(category) => (
-                <div
-                  className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}
-                >
-                  <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
-                    <div className="text-6xl">{category.emoji}</div>
-                    <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
-                    <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
-                    <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
+          <div className="min-h-0 flex-1">
+            {currentCategory ? (
+              <SwipePanel
+                item={currentCategory}
+                nextItem={nextCategory}
+                likeLabel="Like"
+                skipLabel="Pass"
+                onLike={() => onCategoryDecision(currentCategory.id, "like")}
+                onSkip={() => onCategoryDecision(currentCategory.id, "skip")}
+                renderCard={(category) => (
+                  <div
+                    className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}
+                  >
+                    <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
+                      <div className="text-6xl">{category.emoji}</div>
+                      <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
+                      <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
+                      <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
+                    </div>
                   </div>
-                </div>
-              )}
-            />
-          ) : (
-            <div className="rounded-2xl bg-white/6 p-4">
-              <p className="text-lg font-semibold text-white">Your category swipes are done.</p>
-              <p className="mt-2 text-sm leading-6 text-white/58">
-                {sharedCategoryIds.length > 0
-                  ? "BiteSync found shared categories. Continue to restaurant swipes."
-                  : "Waiting for shared category matches. If you are solo, your liked categories will be used."}
-              </p>
-              <button
-                onClick={() => onChangeStage("restaurants")}
-                className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
-              >
-                Continue to restaurants
-              </button>
-            </div>
-          )}
+                )}
+              />
+            ) : (
+              <div className="rounded-2xl bg-white/6 p-3 text-center">
+                <p className="text-xs font-medium text-white/80">Categories complete.</p>
+                <button
+                  type="button"
+                  onClick={() => onChangeStage("restaurants")}
+                  className={`${primaryButtonCompactClass} mt-3`}
+                >
+                  Continue to restaurants
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       ) : null}
 
       {stage === "restaurants" ? (
-        <div className="space-y-4">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-white/55">
-              <span className="text-white/75">Right = like</span>, <span className="text-white/75">left = pass</span>.
-              4.0+ places are listed first.
-            </p>
-            <span className="text-xs uppercase tracking-[0.2em] text-white/45">{pendingRestaurants.length} left</span>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
+            {pendingRestaurants.length} left
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-white/6 px-3 py-3 text-sm leading-relaxed text-white/65">
-            <p>
-              Dining in <span className="font-semibold text-white">{room?.city}</span>
-              {room?.country_code ? ` (${room.country_code})` : ""} — showing places that fit your liked styles
-              {matchedCategorySummary ? (
-                <>
-                  : <span className="text-white/90">{matchedCategorySummary}</span>
-                </>
-              ) : null}
-              . Swipe to like or pass each one.
-            </p>
+          <div className="min-h-0 flex-1">
+            {restaurantsLoading ? (
+              <div className="rounded-2xl bg-white/6 px-3 py-2 text-center text-[11px] text-white/50">
+                Loading {room?.city}…
+              </div>
+            ) : currentRestaurant ? (
+              <SwipePanel
+                item={currentRestaurant}
+                nextItem={nextRestaurant}
+                likeLabel="Like"
+                skipLabel="Pass"
+                onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
+                onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
+                renderCard={(restaurant) => (
+                  <div className="min-h-[320px] rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.28em] text-white/38">Restaurant</p>
+                        <h3 className="mt-3 text-3xl font-semibold text-white">{restaurant.name}</h3>
+                      </div>
+                      <div className="rounded-2xl bg-white/8 px-3 py-2 text-right">
+                        <p className="text-lg font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                        <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                      </div>
+                    </div>
+                    <p className="mt-4 text-sm leading-6 text-white/58">{restaurant.address}</p>
+                    <div className="mt-5 flex flex-wrap gap-2 text-xs text-white/70">
+                      <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                        {restaurant.priceLevel ?? "Price unknown"}
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                        {restaurant.primaryType ?? "Restaurant"}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              />
+            ) : (
+              <div className="rounded-2xl bg-white/6 p-3 text-center">
+                <p className="text-xs font-medium text-white/80">Restaurant round complete.</p>
+                <button
+                  type="button"
+                  onClick={() => onChangeStage("final")}
+                  className={`${primaryButtonCompactClass} mt-3`}
+                >
+                  Show final picks
+                </button>
+              </div>
+            )}
           </div>
-
-          {restaurantsLoading ? (
-            <div className="rounded-2xl bg-white/6 p-4 text-sm text-white/58">
-              Looking up restaurants in {room?.city}...
-            </div>
-          ) : currentRestaurant ? (
-            <SwipePanel
-              item={currentRestaurant}
-              nextItem={nextRestaurant}
-              likeLabel="Like"
-              skipLabel="Pass"
-              onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
-              onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
-              renderCard={(restaurant) => (
-                <div className="min-h-[320px] rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.28em] text-white/38">Restaurant</p>
-                      <h3 className="mt-3 text-3xl font-semibold text-white">{restaurant.name}</h3>
-                    </div>
-                    <div className="rounded-2xl bg-white/8 px-3 py-2 text-right">
-                      <p className="text-lg font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                      <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                    </div>
-                  </div>
-                  <p className="mt-4 text-sm leading-6 text-white/58">{restaurant.address}</p>
-                  <div className="mt-5 flex flex-wrap gap-2 text-xs text-white/70">
-                    <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                      {restaurant.priceLevel ?? "Price unknown"}
-                    </span>
-                    <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                      {restaurant.primaryType ?? "Restaurant"}
-                    </span>
-                  </div>
-                </div>
-              )}
-            />
-          ) : (
-            <div className="rounded-2xl bg-white/6 p-4">
-              <p className="text-lg font-semibold text-white">Restaurant swipes are done.</p>
-              <p className="mt-2 text-sm leading-6 text-white/58">
-                {restaurantCandidates.length > 0
-                  ? "BiteSync is ready to show the places everyone liked."
-                  : "No matching restaurants yet for the shared categories in this city."}
-              </p>
-              <button
-                onClick={() => onChangeStage("final")}
-                className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
-              >
-                Show final picks
-              </button>
-            </div>
-          )}
         </div>
       ) : null}
 
@@ -1884,26 +1848,20 @@ function RoomScreen({
           <div className="min-h-0 flex-1 overflow-y-auto pb-2">{swipeStages}</div>
           {(stage === "categories" || stage === "restaurants") &&
           (swipePickLabel || (stage === "categories" && myLikedCategoriesInVoteOrder.length > 0)) ? (
-            <div className="shrink-0 space-y-2 border-t border-white/10 bg-[#141117]/95 px-4 py-3">
+            <div className="shrink-0 max-h-11 overflow-hidden border-t border-white/10 bg-[#141117]/95 px-2 py-1">
               {stage === "categories" && myLikedCategoriesInVoteOrder.length > 0 ? (
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">All your likes</p>
-                  <p className="mt-1 text-sm font-medium leading-snug text-white">
-                    {myLikedCategoriesInVoteOrder.map((c) => `${c.emoji} ${c.title}`).join(" · ")}
-                  </p>
-                </div>
+                <p className="truncate text-[10px] leading-tight text-white/55" title={myLikedCategoriesInVoteOrder.map((c) => `${c.emoji} ${c.title}`).join(" · ")}>
+                  <span className="text-white/35">Likes:</span>{" "}
+                  {myLikedCategoriesInVoteOrder.map((c) => `${c.emoji}${c.title}`).join(" · ")}
+                </p>
               ) : null}
               {swipePickLabel ? (
-                <div
-                  className={
-                    stage === "categories" && myLikedCategoriesInVoteOrder.length > 0
-                      ? "border-t border-white/8 pt-2 text-center"
-                      : "text-center"
-                  }
+                <p
+                  className={`truncate text-[10px] leading-tight text-white/70 ${stage === "categories" && myLikedCategoriesInVoteOrder.length > 0 ? "mt-0.5" : ""}`}
+                  title={swipePickLabel}
                 >
-                  <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Last swipe</p>
-                  <p className="mt-0.5 text-sm font-semibold text-white">{swipePickLabel}</p>
-                </div>
+                  <span className="text-white/35">Last:</span> {swipePickLabel}
+                </p>
               ) : null}
             </div>
           ) : null}
