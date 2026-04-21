@@ -2501,8 +2501,8 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 
   return (
     <>
-      <div className="flex h-full min-h-[min(260px,48dvh)] w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
-        <div className="relative min-h-[min(140px,36dvh)] flex-1 overflow-hidden bg-[linear-gradient(180deg,#2a2230_0%,#1a1520_100%)]">
+      <div className="flex h-full min-h-0 max-h-full w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
+        <div className="relative min-h-0 flex-1 basis-0 overflow-hidden bg-[linear-gradient(180deg,#2a2230_0%,#1a1520_100%)]">
           {photos[0] ? (
             <button
               type="button"
@@ -2528,7 +2528,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
                   setLightboxIndex(0);
                 }
               }}
-              className="block h-full min-h-[min(140px,36dvh)] w-full cursor-grab touch-manipulation p-0 text-left focus:outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-orange-300/70"
+              className="block h-full min-h-0 w-full cursor-grab touch-manipulation p-0 text-left focus:outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-orange-300/70"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -2537,18 +2537,18 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
                 width={800}
                 height={600}
                 sizes="(max-width: 480px) 92vw, 432px"
-                className="pointer-events-none h-full min-h-[min(140px,36dvh)] w-full object-cover"
+                className="pointer-events-none h-full min-h-0 w-full object-cover"
                 decoding="async"
                 fetchPriority={heroImagePriority}
                 loading={heroImagePriority === "high" ? "eager" : "lazy"}
               />
             </button>
           ) : (
-            <div className="flex h-full min-h-[32dvh] items-center justify-center text-sm text-white/40">No image</div>
+            <div className="flex h-full min-h-[8rem] items-center justify-center text-sm text-white/40">No image</div>
           )}
         </div>
 
-        <div className="shrink-0 space-y-2 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 sm:pt-3">
+        <div className="max-h-[min(240px,42dvh)] shrink-0 space-y-2 overflow-y-auto overflow-x-hidden px-3 pb-3 pt-2 sm:px-4 sm:pb-4 sm:pt-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="text-[10px] uppercase tracking-[0.28em] text-white/38">Restaurant</p>
@@ -2873,7 +2873,7 @@ function RoomScreen({
       ) : null}
 
       {stage === "restaurants" ? (
-        <div className="flex min-h-[min(280px,56dvh)] min-w-0 flex-1 flex-col gap-2">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden">
           {restaurantFocusCategories.length > 0 ? (
             <div className="shrink-0 rounded-xl border border-white/10 bg-white/6 px-3 py-2">
               <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Matching on</p>
@@ -2894,7 +2894,7 @@ function RoomScreen({
             {pendingRestaurants.length} left
           </div>
 
-          <div className="flex min-h-[min(240px,50dvh)] flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {restaurantsLoading ? (
               <div className="rounded-2xl bg-white/6 px-3 py-2 text-center text-[11px] text-white/50">
                 Loading {room?.city}…
@@ -3101,7 +3101,7 @@ function RoomScreen({
       ) : null}
 
       {immersive ? (
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-none pt-1">
           {stage === "waiting_categories" || stage === "category_match" ? (
             <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2">
               <button type="button" onClick={onBack} className={ghostButtonClass}>
@@ -3111,10 +3111,9 @@ function RoomScreen({
             </div>
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-2">{swipeStages}</div>
-          {(stage === "categories" || stage === "restaurants") &&
-          (swipePickLabel || (stage === "categories" && draftLikeIds.size > 0)) ? (
+          {stage === "categories" && (swipePickLabel || draftLikeIds.size > 0) ? (
             <div className="shrink-0 max-h-11 overflow-hidden border-t border-white/10 bg-[#141117]/95 px-2 py-1">
-              {stage === "categories" && draftLikeIds.size > 0 ? (
+              {draftLikeIds.size > 0 ? (
                 <p
                   className="truncate text-[10px] leading-tight text-white/55"
                   title={[...draftLikeIds]
@@ -3133,12 +3132,25 @@ function RoomScreen({
               ) : null}
               {swipePickLabel ? (
                 <p
-                  className={`truncate text-[10px] leading-tight text-white/70 ${stage === "categories" && draftLikeIds.size > 0 ? "mt-0.5" : ""}`}
+                  className={`truncate text-[10px] leading-tight text-white/70 ${draftLikeIds.size > 0 ? "mt-0.5" : ""}`}
                   title={swipePickLabel}
                 >
                   <span className="text-white/35">Last:</span> {swipePickLabel}
                 </p>
               ) : null}
+            </div>
+          ) : null}
+          {stage === "restaurants" ? (
+            <div className="flex min-h-[2.5rem] shrink-0 flex-col justify-center border-t border-white/10 bg-[#141117]/95 px-2 py-1">
+              {swipePickLabel ? (
+                <p className="truncate text-[10px] leading-tight text-white/70" title={swipePickLabel}>
+                  <span className="text-white/35">Last:</span> {swipePickLabel}
+                </p>
+              ) : (
+                <p className="text-[10px] leading-tight text-transparent" aria-hidden>
+                  &nbsp;
+                </p>
+              )}
             </div>
           ) : null}
         </div>
@@ -3235,7 +3247,7 @@ function SwipePanel<T>({
       <div
         className={
           fillHeight
-            ? "relative min-h-[min(300px,52dvh)] flex-1 touch-none select-none rounded-[28px] bg-[#161218]"
+            ? "relative flex-1 touch-none select-none overflow-hidden rounded-[28px] bg-[#161218] min-h-0 max-h-full"
             : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-none select-none rounded-[28px] bg-[#161218] sm:h-[460px]"
         }
       >
