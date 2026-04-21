@@ -354,13 +354,13 @@ export function FoodMatchApp() {
   );
   const currentUserId = session?.user.id ?? null;
   const memberCount = useMemo(() => {
-    const keys = new Set<string>();
-    for (const member of visibleRoomMembers) {
-      const key = roomMemberKey(member);
-      if (!key || key === "n:") continue;
-      keys.add(key);
-    }
-    return keys.size > 0 ? keys.size : 1;
+    if (visibleRoomMembers.length === 0) return 1;
+    const distinctUserIds = new Set(
+      visibleRoomMembers.map((m) => m.user_id).filter((id): id is string => Boolean(id)),
+    );
+    if (distinctUserIds.size >= 2) return distinctUserIds.size;
+    const distinctNames = new Set(visibleRoomMembers.map((m) => m.name.trim().toLowerCase()));
+    return Math.max(distinctNames.size, 1);
   }, [visibleRoomMembers]);
 
   const myCategoryVotes = useMemo(
@@ -872,17 +872,27 @@ export function FoodMatchApp() {
   async function handleCategoryDecision(categoryId: string, decision: "like" | "skip") {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
 
-    try {
-      const alreadyVoted = categoryVotes.some(
-        (vote) =>
-          vote.category_id === categoryId &&
-          (vote.user_id === currentUserId ||
-            (vote.user_id == null && vote.member_name === profile.full_name)),
-      );
+    const isMyVote = (vote: RoomCategoryVote) =>
+      (currentUserId && vote.user_id === currentUserId) ||
+      (vote.user_id == null && profile && vote.member_name === profile.full_name);
 
-      let votesSnapshot = categoryVotes;
+    try {
+      const alreadyVoted = categoryVotes.some((vote) => vote.category_id === categoryId && isMyVote(vote));
+
+      const optimistic: RoomCategoryVote = {
+        id: `local-cat-${categoryId}-${Date.now()}`,
+        user_id: currentUserId,
+        member_name: profile.full_name,
+        category_id: categoryId,
+        decision,
+      };
 
       if (!alreadyVoted) {
+        setCategoryVotes((prev) => {
+          if (prev.some((vote) => vote.category_id === categoryId && isMyVote(vote))) return prev;
+          return [...prev, optimistic];
+        });
+
         const insertError = await insertCategoryVote({
           room_id: activeRoom.id,
           user_id: currentUserId,
@@ -891,48 +901,30 @@ export function FoodMatchApp() {
           decision,
         });
 
-        if (insertError) throw insertError;
-
-        const optimistic: RoomCategoryVote = {
-          id: `local-cat-${categoryId}-${Date.now()}`,
-          user_id: currentUserId,
-          member_name: profile.full_name,
-          category_id: categoryId,
-          decision,
-        };
-
-        votesSnapshot = [...categoryVotes, optimistic];
-
-        setCategoryVotes((prev) => {
-          if (
-            prev.some(
-              (vote) =>
-                vote.category_id === categoryId &&
-                (vote.user_id === currentUserId ||
-                  (vote.user_id == null && vote.member_name === profile.full_name)),
-            )
-          ) {
-            return prev;
-          }
-
-          return [...prev, optimistic];
-        });
+        if (insertError) {
+          setCategoryVotes((prev) => prev.filter((v) => v.id !== optimistic.id));
+          throw insertError;
+        }
       }
 
       const picked = categories.find((c) => c.id === categoryId);
       setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${picked?.title ?? categoryId}`);
 
-      const remaining = pendingCategories.filter((category) => category.id !== categoryId);
-      if (remaining.length > 0) {
+      const answeredCategoryIds = new Set(categoryVotes.filter(isMyVote).map((v) => v.category_id));
+      if (!alreadyVoted) {
+        answeredCategoryIds.add(categoryId);
+      }
+      const remainingCats = categories.filter((c) => !answeredCategoryIds.has(c.id));
+      if (remainingCats.length > 0) {
         return;
       }
 
-      const distinctPeople = new Set(
-        visibleRoomMembers.map((m) => roomMemberKey(m)).filter((key) => key && key !== "n:"),
-      ).size;
-      const isSoloRoom = distinctPeople <= 1;
+      let votesSnapshot = categoryVotes;
+      if (!alreadyVoted) {
+        votesSnapshot = [...categoryVotes, optimistic];
+      }
 
-      if (isSoloRoom) {
+      if (memberCount <= 1) {
         setRoomStage("restaurants");
         return;
       }
