@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
-import { categories, countries } from "@/data/mock-data";
+import { categories, countries, type Category } from "@/data/mock-data";
 import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
 
 type Screen = "auth" | "home" | "profile" | "room";
@@ -306,27 +306,68 @@ export function FoodMatchApp() {
     [myCategoryVotes],
   );
 
-  const restaurantCandidates = useMemo(
-    () =>
-      visibleCityRestaurants
-        .filter((restaurant) =>
-          sharedCategoryIds.length === 0
-            ? memberCount === 1 &&
-              restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
-            : restaurant.categoryIds.some((categoryId) => sharedCategoryIds.includes(categoryId)),
-        )
-        .sort((left, right) => {
-          const leftPriority = left.rating !== null && left.rating >= 4 ? 1 : 0;
-          const rightPriority = right.rating !== null && right.rating >= 4 ? 1 : 0;
+  const myLikedCategoriesInVoteOrder = useMemo(() => {
+    const out: Category[] = [];
+    const seen = new Set<string>();
 
-          if (rightPriority !== leftPriority) {
-            return rightPriority - leftPriority;
-          }
+    for (const vote of myCategoryVotes) {
+      if (vote.decision !== "like") continue;
+      if (seen.has(vote.category_id)) continue;
+      seen.add(vote.category_id);
+      const cat = categories.find((c) => c.id === vote.category_id);
+      if (cat) out.push(cat);
+    }
 
-          return (right.rating ?? 0) - (left.rating ?? 0);
-        }),
-    [memberCount, sharedCategoryIds, soloLikedCategoryIds, visibleCityRestaurants],
-  );
+    return out;
+  }, [myCategoryVotes]);
+
+  const matchedCategorySummary = useMemo(() => {
+    const ids = sharedCategoryIds.length > 0 ? sharedCategoryIds : soloLikedCategoryIds;
+    if (ids.length === 0) return "";
+    return ids.map((id) => categories.find((c) => c.id === id)?.title ?? id).join(" · ");
+  }, [sharedCategoryIds, soloLikedCategoryIds]);
+
+  const diningPlacesFetchKey = useMemo(() => {
+    if (!activeRoom) return "";
+    if (roomStage !== "restaurants" && roomStage !== "final") {
+      return `${activeRoom.id}-preload`;
+    }
+
+    const focusIds = sharedCategoryIds.length > 0 ? sharedCategoryIds : soloLikedCategoryIds;
+
+    return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}`;
+  }, [activeRoom, roomStage, sharedCategoryIds, soloLikedCategoryIds]);
+
+  const restaurantCandidates = useMemo(() => {
+    const sortByRating = (left: CityRestaurant, right: CityRestaurant) => {
+      const leftPriority = left.rating !== null && left.rating >= 4 ? 1 : 0;
+      const rightPriority = right.rating !== null && right.rating >= 4 ? 1 : 0;
+
+      if (rightPriority !== leftPriority) {
+        return rightPriority - leftPriority;
+      }
+
+      return (right.rating ?? 0) - (left.rating ?? 0);
+    };
+
+    const primary = visibleCityRestaurants
+      .filter((restaurant) =>
+        sharedCategoryIds.length === 0
+          ? memberCount === 1 &&
+            restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
+          : restaurant.categoryIds.some((categoryId) => sharedCategoryIds.includes(categoryId)),
+      )
+      .sort(sortByRating);
+
+    if (
+      primary.length > 0 ||
+      !(memberCount === 1 && soloLikedCategoryIds.length > 0 && visibleCityRestaurants.length > 0)
+    ) {
+      return primary;
+    }
+
+    return [...visibleCityRestaurants].sort(sortByRating);
+  }, [memberCount, sharedCategoryIds, soloLikedCategoryIds, visibleCityRestaurants]);
 
   const myRestaurantVotes = useMemo(
     () =>
@@ -955,16 +996,24 @@ export function FoodMatchApp() {
     const controller = new AbortController();
     const roomCity = activeRoom.city;
     const roomCountry = activeRoom.country_code;
+    const enrich = roomStage === "restaurants" || roomStage === "final";
+    const focusIds = sharedCategoryIds.length > 0 ? sharedCategoryIds : soloLikedCategoryIds;
 
     async function loadRestaurants() {
       setRestaurantsLoading(true);
       try {
-        const response = await fetch(
-          `/api/restaurants?city=${encodeURIComponent(roomCity)}&country=${encodeURIComponent(
-            roomCountry,
-          )}`,
-          { signal: controller.signal },
-        );
+        const params = new URLSearchParams({
+          city: roomCity,
+          country: roomCountry,
+        });
+
+        if (enrich && focusIds.length > 0) {
+          params.set("likedCategories", focusIds.join(","));
+        }
+
+        const response = await fetch(`/api/restaurants?${params.toString()}`, {
+          signal: controller.signal,
+        });
 
         const payload = (await response.json()) as {
           places?: CityRestaurant[];
@@ -997,7 +1046,9 @@ export function FoodMatchApp() {
       active = false;
       controller.abort();
     };
-  }, [activeRoom]);
+    // `diningPlacesFetchKey` intentionally encodes roomStage + liked category ids for fetch timing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid refetching on every category swipe while still in "categories"
+  }, [activeRoom, diningPlacesFetchKey]);
 
   if (loading) {
     return (
@@ -1119,6 +1170,8 @@ export function FoodMatchApp() {
                 finalRestaurants={finalRestaurants}
                 restaurantsLoading={restaurantsLoading}
                 swipePickLabel={swipePickLabel}
+                myLikedCategoriesInVoteOrder={myLikedCategoriesInVoteOrder}
+                matchedCategorySummary={matchedCategorySummary}
                 onStart={() => setRoomStage("categories")}
                 onChangeStage={setRoomStage}
                 onCategoryDecision={handleCategoryDecision}
@@ -1487,6 +1540,8 @@ function RoomScreen({
   finalRestaurants,
   restaurantsLoading,
   swipePickLabel,
+  myLikedCategoriesInVoteOrder,
+  matchedCategorySummary,
   onStart,
   onChangeStage,
   onCategoryDecision,
@@ -1507,6 +1562,8 @@ function RoomScreen({
   finalRestaurants: CityRestaurant[];
   restaurantsLoading: boolean;
   swipePickLabel: string;
+  myLikedCategoriesInVoteOrder: Category[];
+  matchedCategorySummary: string;
   onStart: () => void;
   onChangeStage: (value: RoomStage) => void;
   onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
@@ -1545,6 +1602,23 @@ function RoomScreen({
             </p>
             <span className="text-xs uppercase tracking-[0.2em] text-white/45">{pendingCategories.length} left</span>
           </div>
+
+          {myLikedCategoriesInVoteOrder.length > 0 ? (
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/8 px-3 py-3">
+              <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-100/70">Categories you liked</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {myLikedCategoriesInVoteOrder.map((cat) => (
+                  <span
+                    key={cat.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/8 px-3 py-1.5 text-sm font-medium text-white"
+                  >
+                    <span>{cat.emoji}</span>
+                    {cat.title}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {currentCategory ? (
             <SwipePanel
@@ -1594,6 +1668,19 @@ function RoomScreen({
               4.0+ places are listed first.
             </p>
             <span className="text-xs uppercase tracking-[0.2em] text-white/45">{pendingRestaurants.length} left</span>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/6 px-3 py-3 text-sm leading-relaxed text-white/65">
+            <p>
+              Dining in <span className="font-semibold text-white">{room?.city}</span>
+              {room?.country_code ? ` (${room.country_code})` : ""} — showing places that fit your liked styles
+              {matchedCategorySummary ? (
+                <>
+                  : <span className="text-white/90">{matchedCategorySummary}</span>
+                </>
+              ) : null}
+              . Swipe to like or pass each one.
+            </p>
           </div>
 
           {restaurantsLoading ? (
@@ -1795,10 +1882,29 @@ function RoomScreen({
       {immersive ? (
         <div className="room-swipe-reveal flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
           <div className="min-h-0 flex-1 overflow-y-auto pb-2">{swipeStages}</div>
-          {(stage === "categories" || stage === "restaurants") && swipePickLabel ? (
-            <div className="shrink-0 border-t border-white/10 bg-[#141117]/95 px-4 py-3 text-center">
-              <p className="text-xs uppercase tracking-[0.22em] text-white/45">Your pick</p>
-              <p className="mt-1 text-sm font-semibold text-white">{swipePickLabel}</p>
+          {(stage === "categories" || stage === "restaurants") &&
+          (swipePickLabel || (stage === "categories" && myLikedCategoriesInVoteOrder.length > 0)) ? (
+            <div className="shrink-0 space-y-2 border-t border-white/10 bg-[#141117]/95 px-4 py-3">
+              {stage === "categories" && myLikedCategoriesInVoteOrder.length > 0 ? (
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">All your likes</p>
+                  <p className="mt-1 text-sm font-medium leading-snug text-white">
+                    {myLikedCategoriesInVoteOrder.map((c) => `${c.emoji} ${c.title}`).join(" · ")}
+                  </p>
+                </div>
+              ) : null}
+              {swipePickLabel ? (
+                <div
+                  className={
+                    stage === "categories" && myLikedCategoriesInVoteOrder.length > 0
+                      ? "border-t border-white/8 pt-2 text-center"
+                      : "text-center"
+                  }
+                >
+                  <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Last swipe</p>
+                  <p className="mt-0.5 text-sm font-semibold text-white">{swipePickLabel}</p>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

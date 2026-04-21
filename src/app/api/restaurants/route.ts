@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { categories } from "@/data/mock-data";
+
 const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
 
 const fieldMask = [
@@ -70,6 +72,12 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const city = searchParams.get("city");
   const country = searchParams.get("country");
+  const likedParam = searchParams.get("likedCategories");
+  const likedIds =
+    likedParam
+      ?.split(",")
+      .map((part) => part.trim())
+      .filter(Boolean) ?? [];
 
   if (!city || !country) {
     return NextResponse.json({ error: "City and country are required." }, { status: 400 });
@@ -82,6 +90,17 @@ export async function GET(request: Request) {
     );
   }
 
+  const likedLabels = likedIds
+    .map((id) => categories.find((c) => c.id === id)?.title ?? id)
+    .filter(Boolean);
+
+  const textQuery =
+    likedLabels.length > 0
+      ? `Best ${likedLabels.join(" and ")} restaurants and food places in ${city}, ${country}`
+      : `Restaurants and food in ${city}, ${country}`;
+
+  const maxResultCount = likedLabels.length > 0 ? 24 : 16;
+
   try {
     const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
@@ -91,8 +110,8 @@ export async function GET(request: Request) {
         "X-Goog-FieldMask": fieldMask,
       },
       body: JSON.stringify({
-        textQuery: `restaurants in ${city}, ${country}`,
-        maxResultCount: 8,
+        textQuery,
+        maxResultCount,
       }),
       cache: "no-store",
     });
