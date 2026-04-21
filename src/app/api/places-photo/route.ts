@@ -27,10 +27,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid photo reference." }, { status: 400 });
   }
 
+  const clampDim = (value: string | null, fallback: number) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(1600, Math.max(120, Math.round(n)));
+  };
+
+  const maxWidthPx = clampDim(searchParams.get("w"), 800);
+  const maxHeightPx = clampDim(searchParams.get("h"), 600);
+
   const path = encodeGoogleResourcePath(photoName);
   const upstream = new URL(`https://places.googleapis.com/v1/${path}/media`);
-  upstream.searchParams.set("maxHeightPx", "1600");
-  upstream.searchParams.set("maxWidthPx", "1200");
+  upstream.searchParams.set("maxWidthPx", String(maxWidthPx));
+  upstream.searchParams.set("maxHeightPx", String(maxHeightPx));
   upstream.searchParams.set("key", googleMapsApiKey);
 
   try {
@@ -46,7 +55,7 @@ export async function GET(request: Request) {
     return new NextResponse(buffer, {
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
       },
     });
   } catch {

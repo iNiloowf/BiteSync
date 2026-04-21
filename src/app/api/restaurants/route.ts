@@ -17,9 +17,10 @@ const fieldMask = [
   "places.photos",
 ].join(",");
 
-function toPlacePhotoProxyUrl(photoName: string) {
+/** Card-sized images load much faster than full 1200×1600 pulls. Lightbox can request larger w/h on the same route. */
+function toPlacePhotoProxyUrl(photoName: string, maxWidthPx = 800, maxHeightPx = 600) {
   const n = Buffer.from(photoName, "utf8").toString("base64url");
-  return `/api/places-photo?n=${encodeURIComponent(n)}`;
+  return `/api/places-photo?n=${encodeURIComponent(n)}&w=${maxWidthPx}&h=${maxHeightPx}`;
 }
 
 const categoryMatchers: Array<{ id: string; patterns: RegExp[] }> = [
@@ -149,9 +150,11 @@ function normalizePlace(place: GooglePlace): NormalizedPlace {
   ].filter(Boolean);
 
   const photoUrls = (place.photos ?? [])
-    .map((photo) => (photo.name ? toPlacePhotoProxyUrl(photo.name) : null))
+    .map((photo, index) =>
+      photo.name ? toPlacePhotoProxyUrl(photo.name, index === 0 ? 800 : 280, index === 0 ? 600 : 210) : null,
+    )
     .filter((url): url is string => Boolean(url))
-    .slice(0, 8);
+    .slice(0, 6);
 
   return {
     id: place.id,

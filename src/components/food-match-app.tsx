@@ -1892,6 +1892,18 @@ function ProfileScreen({
   );
 }
 
+function placePhotoWithSize(src: string, w: number, h: number) {
+  if (typeof window === "undefined" || !src.includes("places-photo")) return src;
+  try {
+    const u = new URL(src, window.location.origin);
+    u.searchParams.set("w", String(w));
+    u.searchParams.set("h", String(h));
+    return `${u.pathname}${u.search}`;
+  } catch {
+    return src;
+  }
+}
+
 const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   restaurant,
   heroImagePriority = "low",
@@ -1956,6 +1968,9 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             <img
               src={photos[0]}
               alt=""
+              width={800}
+              height={600}
+              sizes="(max-width: 480px) 92vw, 432px"
               className="h-full min-h-[min(140px,36dvh)] w-full object-cover"
               decoding="async"
               fetchPriority={heroImagePriority}
@@ -2014,11 +2029,19 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
                   key={src}
                   type="button"
                   onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => setLightboxSrc(src)}
+                  onClick={() => setLightboxSrc(placePhotoWithSize(src, 1280, 960))}
                   className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg ring-1 ring-white/20 transition hover:ring-white/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70 sm:h-14 sm:w-14"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
+                  <img
+                    src={placePhotoWithSize(src, 240, 240)}
+                    alt=""
+                    width={240}
+                    height={240}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                  />
                 </button>
               ))}
             </div>
@@ -2036,12 +2059,14 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 
 const CategorySwipeCard = memo(function CategorySwipeCardInner({ category }: { category: Category }) {
   return (
-    <div className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}>
-      <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
-        <div className="text-6xl">{category.emoji}</div>
-        <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
-        <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
-        <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
+    <div
+      className={`min-h-[min(400px,56dvh)] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures} sm:min-h-[min(428px,58dvh)]`}
+    >
+      <div className="flex h-full min-h-[inherit] flex-col rounded-[31px] bg-[#17131b]/96 p-7 sm:p-8">
+        <div className="text-7xl leading-none sm:text-8xl">{category.emoji}</div>
+        <p className="mt-7 text-xs uppercase tracking-[0.28em] text-white/45 sm:mt-8">Food style</p>
+        <h3 className="mt-3 text-4xl font-semibold leading-tight text-white sm:text-5xl">{category.title}</h3>
+        <p className="mt-4 text-base leading-7 text-white/65 sm:mt-5 sm:text-lg sm:leading-8">{category.blurb}</p>
       </div>
     </div>
   );
@@ -2561,7 +2586,7 @@ function SwipePanel<T>({
         className={
           fillHeight
             ? "relative min-h-[min(300px,52dvh)] flex-1 touch-none select-none"
-            : "relative h-[340px] touch-none select-none"
+            : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-none select-none sm:h-[460px]"
         }
       >
         {nextItem ? (
