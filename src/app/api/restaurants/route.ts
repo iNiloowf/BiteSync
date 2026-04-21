@@ -9,8 +9,37 @@ const fieldMask = [
   "places.rating",
   "places.userRatingCount",
   "places.priceLevel",
+  "places.primaryType",
   "places.primaryTypeDisplayName",
+  "places.types",
 ].join(",");
+
+const categoryMatchers: Array<{ id: string; patterns: RegExp[] }> = [
+  {
+    id: "pizza",
+    patterns: [/pizza/i, /pizzeria/i],
+  },
+  {
+    id: "burgers",
+    patterns: [/burger/i, /fast[_\s-]?food/i, /american[_\s-]?restaurant/i, /fried[_\s-]?chicken/i],
+  },
+  {
+    id: "italian",
+    patterns: [/italian/i, /pasta/i],
+  },
+  {
+    id: "sushi",
+    patterns: [/sushi/i, /japanese/i, /ramen/i],
+  },
+  {
+    id: "mexican",
+    patterns: [/mexican/i, /taco/i],
+  },
+  {
+    id: "healthy",
+    patterns: [/vegan/i, /vegetarian/i, /salad/i, /healthy/i, /poke/i],
+  },
+];
 
 function formatPriceLevel(value?: string) {
   if (!value) return null;
@@ -29,6 +58,12 @@ function formatPriceLevel(value?: string) {
     default:
       return normalized;
   }
+}
+
+function inferCategoryIds(typeParts: string[]) {
+  return categoryMatchers
+    .filter(({ patterns }) => patterns.some((pattern) => typeParts.some((part) => pattern.test(part))))
+    .map(({ id }) => id);
 }
 
 export async function GET(request: Request) {
@@ -70,7 +105,9 @@ export async function GET(request: Request) {
         rating?: number;
         userRatingCount?: number;
         priceLevel?: string;
+        primaryType?: string;
         primaryTypeDisplayName?: { text?: string };
+        types?: string[];
       }>;
       error?: { message?: string };
     };
@@ -83,15 +120,24 @@ export async function GET(request: Request) {
     }
 
     const places =
-      payload.places?.map((place) => ({
-        id: place.id,
-        name: place.displayName?.text ?? "Unknown place",
-        address: place.formattedAddress ?? "",
-        rating: place.rating ?? null,
-        userRatingCount: place.userRatingCount ?? null,
-        priceLevel: formatPriceLevel(place.priceLevel),
-        primaryType: place.primaryTypeDisplayName?.text ?? null,
-      })) ?? [];
+      payload.places?.map((place) => {
+        const typeParts = [
+          place.primaryType ?? "",
+          place.primaryTypeDisplayName?.text ?? "",
+          ...(place.types ?? []),
+        ].filter(Boolean);
+
+        return {
+          id: place.id,
+          name: place.displayName?.text ?? "Unknown place",
+          address: place.formattedAddress ?? "",
+          rating: place.rating ?? null,
+          userRatingCount: place.userRatingCount ?? null,
+          priceLevel: formatPriceLevel(place.priceLevel),
+          primaryType: place.primaryTypeDisplayName?.text ?? null,
+          categoryIds: inferCategoryIds(typeParts),
+        };
+      }) ?? [];
 
     return NextResponse.json({ places });
   } catch (error) {

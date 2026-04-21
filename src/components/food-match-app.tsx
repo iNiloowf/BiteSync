@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
-import { countries } from "@/data/mock-data";
+import { categories, countries } from "@/data/mock-data";
 import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
 
 type Screen = "auth" | "home" | "profile" | "room";
 type AuthMode = "signin" | "signup";
 type RoomMode = "host" | "join";
+type RoomStage = "lobby" | "categories" | "restaurants" | "final";
 
 type Profile = {
   id: string;
@@ -40,6 +41,23 @@ type CityRestaurant = {
   userRatingCount: number | null;
   priceLevel: string | null;
   primaryType: string | null;
+  categoryIds: string[];
+};
+
+type RoomCategoryVote = {
+  id: string;
+  user_id: string | null;
+  category_id: string;
+  decision: "like" | "skip";
+  member_name: string;
+};
+
+type RoomRestaurantVote = {
+  id: string;
+  user_id: string | null;
+  restaurant_id: string;
+  decision: "like" | "skip";
+  member_name: string;
 };
 
 type UntypedQueryResult<T> = Promise<{ data: T; error?: { message?: string } | null }>;
@@ -75,6 +93,14 @@ type MembersTable = {
   upsert: (value: unknown) => unknown;
 };
 
+type CategoryVotesTable = {
+  insert: (value: unknown) => Promise<{ error?: { message?: string } | null }>;
+};
+
+type RestaurantVotesTable = {
+  insert: (value: unknown) => Promise<{ error?: { message?: string } | null }>;
+};
+
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -99,6 +125,9 @@ export function FoodMatchApp() {
   const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
   const [cityRestaurants, setCityRestaurants] = useState<CityRestaurant[]>([]);
   const [restaurantsLoading, setRestaurantsLoading] = useState(false);
+  const [roomStage, setRoomStage] = useState<RoomStage>("lobby");
+  const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
+  const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -117,12 +146,100 @@ export function FoodMatchApp() {
     [supabase],
   );
 
+  const getCategoryVotesTable = useCallback(
+    () => supabase?.from("room_category_votes") as unknown as CategoryVotesTable,
+    [supabase],
+  );
+
+  const getRestaurantVotesTable = useCallback(
+    () => supabase?.from("room_restaurant_votes") as unknown as RestaurantVotesTable,
+    [supabase],
+  );
+
   const visibleRoomMembers = activeRoom ? roomMembers : [];
-  const visibleCityRestaurants = activeRoom ? cityRestaurants : [];
+  const visibleCityRestaurants = useMemo(
+    () => (activeRoom ? cityRestaurants : []),
+    [activeRoom, cityRestaurants],
+  );
+  const currentUserId = session?.user.id ?? null;
+  const memberCount = visibleRoomMembers.length || 1;
+
+  const myCategoryVotes = useMemo(
+    () => categoryVotes.filter((vote) => vote.user_id === currentUserId),
+    [categoryVotes, currentUserId],
+  );
+
+  const pendingCategories = useMemo(
+    () => categories.filter((category) => !myCategoryVotes.some((vote) => vote.category_id === category.id)),
+    [myCategoryVotes],
+  );
+
+  const sharedCategoryIds = useMemo(
+    () => getSharedLikedIds({
+      votes: categoryVotes,
+      itemKey: "category_id",
+      memberCount,
+      fallbackVotes: myCategoryVotes,
+    }),
+    [categoryVotes, memberCount, myCategoryVotes],
+  );
+
+  const soloLikedCategoryIds = useMemo(
+    () => myCategoryVotes.filter((vote) => vote.decision === "like").map((vote) => vote.category_id),
+    [myCategoryVotes],
+  );
+
+  const restaurantCandidates = useMemo(
+    () =>
+      visibleCityRestaurants
+        .filter((restaurant) => restaurant.rating === null || restaurant.rating >= 4)
+        .filter((restaurant) =>
+          sharedCategoryIds.length === 0
+            ? memberCount === 1 &&
+              restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
+            : restaurant.categoryIds.some((categoryId) => sharedCategoryIds.includes(categoryId)),
+        )
+        .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0)),
+    [memberCount, sharedCategoryIds, soloLikedCategoryIds, visibleCityRestaurants],
+  );
+
+  const myRestaurantVotes = useMemo(
+    () => restaurantVotes.filter((vote) => vote.user_id === currentUserId),
+    [currentUserId, restaurantVotes],
+  );
+
+  const pendingRestaurants = useMemo(
+    () =>
+      restaurantCandidates.filter(
+        (restaurant) => !myRestaurantVotes.some((vote) => vote.restaurant_id === restaurant.id),
+      ),
+    [myRestaurantVotes, restaurantCandidates],
+  );
+
+  const finalRestaurantIds = useMemo(
+    () =>
+      getSharedLikedIds({
+        votes: restaurantVotes,
+        itemKey: "restaurant_id",
+        memberCount,
+        fallbackVotes: myRestaurantVotes,
+      }),
+    [memberCount, myRestaurantVotes, restaurantVotes],
+  );
+
+  const finalRestaurants = useMemo(
+    () =>
+      restaurantCandidates
+        .filter((restaurant) => finalRestaurantIds.includes(restaurant.id))
+        .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0)),
+    [finalRestaurantIds, restaurantCandidates],
+  );
 
   const loadProfile = useCallback(
     async (user: User) => {
       if (!supabase) return;
+
+      setEmail(user.email ?? "");
 
       const profilesQuery = getProfilesTable();
 
@@ -163,6 +280,7 @@ export function FoodMatchApp() {
       if (!mounted) return;
       const nextSession = data.session;
       setSession(nextSession);
+      setEmail(nextSession?.user.email ?? "");
       if (nextSession?.user) {
         await loadProfile(nextSession.user);
         setScreen("home");
@@ -176,6 +294,7 @@ export function FoodMatchApp() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
+      setEmail(nextSession?.user.email ?? "");
       if (nextSession?.user) {
         void loadProfile(nextSession.user);
         setScreen("home");
@@ -252,6 +371,9 @@ export function FoodMatchApp() {
     await supabase.auth.signOut();
     setMenuOpen(false);
     setActiveRoom(null);
+    setRoomStage("lobby");
+    setCategoryVotes([]);
+    setRestaurantVotes([]);
   }
 
   async function handleSaveProfile() {
@@ -260,6 +382,16 @@ export function FoodMatchApp() {
     setMessage("");
 
     try {
+      const normalizedEmail = email.trim();
+
+      if (normalizedEmail && normalizedEmail !== session.user.email) {
+        const { error: emailError } = await supabase.auth.updateUser({
+          email: normalizedEmail,
+        });
+
+        if (emailError) throw emailError;
+      }
+
       const payload = {
         id: session.user.id,
         full_name: fullName,
@@ -272,6 +404,9 @@ export function FoodMatchApp() {
       if (error) throw error;
 
       setProfile(data as Profile);
+      if (normalizedEmail && normalizedEmail !== session.user.email) {
+        setMessage("Email update requested. Check your inbox to confirm the new address.");
+      }
       setScreen("home");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save your profile.");
@@ -342,6 +477,9 @@ export function FoodMatchApp() {
         name: profile.full_name,
       });
 
+      setRoomStage("lobby");
+      setCategoryVotes([]);
+      setRestaurantVotes([]);
       setActiveRoom(roomData as RoomRecord);
       setRoomMode("host");
       setScreen("room");
@@ -373,6 +511,9 @@ export function FoodMatchApp() {
         name: profile.full_name,
       });
 
+      setRoomStage("lobby");
+      setCategoryVotes([]);
+      setRestaurantVotes([]);
       setActiveRoom(roomData as RoomRecord);
       setRoomMode("join");
       setScreen("room");
@@ -380,6 +521,64 @@ export function FoodMatchApp() {
       setMessage(error instanceof Error ? error.message : "Could not join room.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleCategoryDecision(categoryId: string, decision: "like" | "skip") {
+    if (!supabase || !activeRoom || !profile || !currentUserId) return;
+
+    try {
+      const alreadyVoted = categoryVotes.some(
+        (vote) => vote.user_id === currentUserId && vote.category_id === categoryId,
+      );
+
+      if (!alreadyVoted) {
+        const { error } = await getCategoryVotesTable().insert({
+          room_id: activeRoom.id,
+          user_id: currentUserId,
+          member_name: profile.full_name,
+          category_id: categoryId,
+          decision,
+        });
+
+        if (error) throw error;
+      }
+
+      const remaining = pendingCategories.filter((category) => category.id !== categoryId);
+      if (remaining.length === 0) {
+        setRoomStage("restaurants");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save your category vote.");
+    }
+  }
+
+  async function handleRestaurantDecision(restaurantId: string, decision: "like" | "skip") {
+    if (!supabase || !activeRoom || !profile || !currentUserId) return;
+
+    try {
+      const alreadyVoted = restaurantVotes.some(
+        (vote) => vote.user_id === currentUserId && vote.restaurant_id === restaurantId,
+      );
+
+      if (!alreadyVoted) {
+        const { error } = await getRestaurantVotesTable().insert({
+          room_id: activeRoom.id,
+          user_id: currentUserId,
+          member_name: profile.full_name,
+          restaurant_id: restaurantId,
+          decision,
+        });
+
+        if (error) throw error;
+      }
+
+      const remaining = pendingRestaurants.filter((restaurant) => restaurant.id !== restaurantId);
+      if (remaining.length === 0) {
+        setRoomStage("final");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save your restaurant vote.");
     }
   }
 
@@ -425,6 +624,81 @@ export function FoodMatchApp() {
     return () => {
       active = false;
       void supabase.removeChannel(channel);
+    };
+  }, [activeRoom, supabase]);
+
+  useEffect(() => {
+    if (!supabase || !activeRoom) {
+      return;
+    }
+
+    const client = supabase;
+    const roomId = activeRoom.id;
+    let active = true;
+
+    async function loadCategoryVotes() {
+      const { data } = await client
+        .from("room_category_votes")
+        .select("id,user_id,category_id,decision,member_name")
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: true });
+
+      if (active) {
+        setCategoryVotes(((data as RoomCategoryVote[] | null) ?? []).filter(Boolean));
+      }
+    }
+
+    async function loadRestaurantVotes() {
+      const { data } = await client
+        .from("room_restaurant_votes")
+        .select("id,user_id,restaurant_id,decision,member_name")
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: true });
+
+      if (active) {
+        setRestaurantVotes(((data as RoomRestaurantVote[] | null) ?? []).filter(Boolean));
+      }
+    }
+
+    void loadCategoryVotes();
+    void loadRestaurantVotes();
+
+    const categoryChannel = supabase
+      .channel(`room-category-votes-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_category_votes",
+          filter: `room_id=eq.${roomId}`,
+        },
+        () => {
+          void loadCategoryVotes();
+        },
+      )
+      .subscribe();
+
+    const restaurantChannel = supabase
+      .channel(`room-restaurant-votes-${roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_restaurant_votes",
+          filter: `room_id=eq.${roomId}`,
+        },
+        () => {
+          void loadRestaurantVotes();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(categoryChannel);
+      void supabase.removeChannel(restaurantChannel);
     };
   }, [activeRoom, supabase]);
 
@@ -567,6 +841,7 @@ export function FoodMatchApp() {
             {screen === "profile" ? (
               <ProfileScreen
                 profile={profile}
+                email={email}
                 fullName={fullName}
                 countryCode={countryCode}
                 city={city}
@@ -574,6 +849,7 @@ export function FoodMatchApp() {
                 avatarUploading={avatarUploading}
                 fileInputRef={fileInputRef}
                 onBack={() => setScreen("home")}
+                onEmailChange={setEmail}
                 onFullNameChange={setFullName}
                 onCountryChange={setCountryCode}
                 onCityChange={setCity}
@@ -588,10 +864,25 @@ export function FoodMatchApp() {
                 profile={profile}
                 room={activeRoom}
                 mode={roomMode}
+                stage={roomStage}
                 roomMembers={visibleRoomMembers}
+                categoryVotes={categoryVotes}
+                restaurantVotes={restaurantVotes}
+                sharedCategoryIds={sharedCategoryIds}
                 cityRestaurants={visibleCityRestaurants}
+                restaurantCandidates={restaurantCandidates}
+                pendingCategories={pendingCategories}
+                pendingRestaurants={pendingRestaurants}
+                finalRestaurants={finalRestaurants}
                 restaurantsLoading={restaurantsLoading}
-                onBack={() => setScreen("home")}
+                onStart={() => setRoomStage("categories")}
+                onChangeStage={setRoomStage}
+                onCategoryDecision={handleCategoryDecision}
+                onRestaurantDecision={handleRestaurantDecision}
+                onBack={() => {
+                  setScreen("home");
+                  setRoomStage("lobby");
+                }}
               />
             ) : null}
           </div>
@@ -819,6 +1110,7 @@ function HomeScreen({
 
 function ProfileScreen({
   profile,
+  email,
   fullName,
   countryCode,
   city,
@@ -826,6 +1118,7 @@ function ProfileScreen({
   avatarUploading,
   fileInputRef,
   onBack,
+  onEmailChange,
   onFullNameChange,
   onCountryChange,
   onCityChange,
@@ -834,6 +1127,7 @@ function ProfileScreen({
   onSave,
 }: {
   profile: Profile | null;
+  email: string;
   fullName: string;
   countryCode: string;
   city: string;
@@ -841,6 +1135,7 @@ function ProfileScreen({
   avatarUploading: boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   onBack: () => void;
+  onEmailChange: (value: string) => void;
   onFullNameChange: (value: string) => void;
   onCountryChange: (value: string) => void;
   onCityChange: (value: string) => void;
@@ -898,6 +1193,10 @@ function ProfileScreen({
             <input value={fullName} onChange={(event) => onFullNameChange(event.target.value)} className={fieldClass} />
           </Field>
 
+          <Field label="Email">
+            <input value={email} onChange={(event) => onEmailChange(event.target.value)} className={fieldClass} type="email" />
+          </Field>
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="Country">
               <select value={countryCode} onChange={(event) => onCountryChange(event.target.value)} className={fieldClass}>
@@ -927,19 +1226,50 @@ function RoomScreen({
   profile,
   room,
   mode,
+  stage,
   roomMembers,
+  categoryVotes,
+  restaurantVotes,
+  sharedCategoryIds,
   cityRestaurants,
+  restaurantCandidates,
+  pendingCategories,
+  pendingRestaurants,
+  finalRestaurants,
   restaurantsLoading,
+  onStart,
+  onChangeStage,
+  onCategoryDecision,
+  onRestaurantDecision,
   onBack,
 }: {
   profile: Profile | null;
   room: RoomRecord | null;
   mode: RoomMode;
+  stage: RoomStage;
   roomMembers: RoomMember[];
+  categoryVotes: RoomCategoryVote[];
+  restaurantVotes: RoomRestaurantVote[];
+  sharedCategoryIds: string[];
   cityRestaurants: CityRestaurant[];
+  restaurantCandidates: CityRestaurant[];
+  pendingCategories: typeof categories;
+  pendingRestaurants: CityRestaurant[];
+  finalRestaurants: CityRestaurant[];
   restaurantsLoading: boolean;
+  onStart: () => void;
+  onChangeStage: (value: RoomStage) => void;
+  onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
+  onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void;
   onBack: () => void;
 }) {
+  const categoryVotesCount = categoryVotes.filter((vote) => vote.decision === "like").length;
+  const restaurantVotesCount = restaurantVotes.filter((vote) => vote.decision === "like").length;
+  const currentCategory = pendingCategories[0] ?? null;
+  const nextCategory = pendingCategories[1] ?? null;
+  const currentRestaurant = pendingRestaurants[0] ?? null;
+  const nextRestaurant = pendingRestaurants[1] ?? null;
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
       <div className="flex items-center justify-between">
@@ -986,42 +1316,296 @@ function RoomScreen({
 
           <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-white/55">Restaurants in {room?.city}</p>
-              <span className="text-xs text-white/45">
-                {restaurantsLoading ? "loading..." : `${cityRestaurants.length} places`}
-              </span>
+              <p className="text-sm text-white/55">Room flow</p>
+              <span className="text-xs uppercase tracking-[0.22em] text-white/45">{stage}</span>
             </div>
-            <div className="mt-3 space-y-2">
-              {cityRestaurants.length > 0 ? (
-                cityRestaurants.map((restaurant) => (
-                  <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium text-white">{restaurant.name}</p>
-                        <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
+
+            {stage === "lobby" ? (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl bg-white/6 p-4">
+                  <p className="text-lg font-semibold text-white">Start whenever you are ready.</p>
+                  <p className="mt-2 text-sm leading-6 text-white/58">
+                    You can start the category round even if nobody else has joined yet. If more people join later,
+                    BiteSync will use only the shared liked categories.
+                  </p>
+                </div>
+
+                <button onClick={onStart} className={primaryButtonClass}>
+                  Start swiping categories
+                </button>
+              </div>
+            ) : null}
+
+            {stage === "categories" ? (
+              <div className="mt-4 space-y-4">
+                <div className="flex items-center justify-between text-sm text-white/55">
+                  <span>Swipe right to like, left to pass.</span>
+                  <span>{pendingCategories.length} left</span>
+                </div>
+
+                {currentCategory ? (
+                  <SwipePanel
+                    item={currentCategory}
+                    nextItem={nextCategory}
+                    likeLabel="Like"
+                    skipLabel="Pass"
+                    onLike={() => onCategoryDecision(currentCategory.id, "like")}
+                    onSkip={() => onCategoryDecision(currentCategory.id, "skip")}
+                    renderCard={(category) => (
+                      <div
+                        className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}
+                      >
+                        <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
+                          <div className="text-6xl">{category.emoji}</div>
+                          <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
+                          <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
+                          <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                        <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                      </div>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2 text-xs text-white/45">
-                      <span>{restaurant.priceLevel ?? "Price unknown"}</span>
-                      <span>•</span>
-                      <span>{restaurant.primaryType ?? "Restaurant"}</span>
-                    </div>
+                    )}
+                  />
+                ) : (
+                  <div className="rounded-2xl bg-white/6 p-4">
+                    <p className="text-lg font-semibold text-white">Your category swipes are done.</p>
+                    <p className="mt-2 text-sm leading-6 text-white/58">
+                      {sharedCategoryIds.length > 0
+                        ? "BiteSync found shared categories. Continue to restaurant swipes."
+                        : "Waiting for shared category matches. If you are solo, your liked categories will be used."}
+                    </p>
+                    <button
+                      onClick={() => onChangeStage("restaurants")}
+                      className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
+                    >
+                      Continue to restaurants
+                    </button>
                   </div>
-                ))
-              ) : (
-                <p className="text-sm text-white/55">
-                  {restaurantsLoading
-                    ? "Looking up real restaurants for this city..."
-                    : "No restaurant data yet. Add the Google Places API key and redeploy."}
-                </p>
-              )}
+                )}
+              </div>
+            ) : null}
+
+            {stage === "restaurants" ? (
+              <div className="mt-4 space-y-4">
+                <div className="flex items-center justify-between text-sm text-white/55">
+                  <span>Only places rated 4.0+ appear first.</span>
+                  <span>{pendingRestaurants.length} left</span>
+                </div>
+
+                {restaurantsLoading ? (
+                  <div className="rounded-2xl bg-white/6 p-4 text-sm text-white/58">
+                    Looking up restaurants in {room?.city}...
+                  </div>
+                ) : currentRestaurant ? (
+                  <SwipePanel
+                    item={currentRestaurant}
+                    nextItem={nextRestaurant}
+                    likeLabel="Like"
+                    skipLabel="Pass"
+                    onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
+                    onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
+                    renderCard={(restaurant) => (
+                      <div className="min-h-[320px] rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.28em] text-white/38">Restaurant</p>
+                            <h3 className="mt-3 text-3xl font-semibold text-white">{restaurant.name}</h3>
+                          </div>
+                          <div className="rounded-2xl bg-white/8 px-3 py-2 text-right">
+                            <p className="text-lg font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                            <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                          </div>
+                        </div>
+                        <p className="mt-4 text-sm leading-6 text-white/58">{restaurant.address}</p>
+                        <div className="mt-5 flex flex-wrap gap-2 text-xs text-white/70">
+                          <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                            {restaurant.priceLevel ?? "Price unknown"}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                            {restaurant.primaryType ?? "Restaurant"}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  />
+                ) : (
+                  <div className="rounded-2xl bg-white/6 p-4">
+                    <p className="text-lg font-semibold text-white">Restaurant swipes are done.</p>
+                    <p className="mt-2 text-sm leading-6 text-white/58">
+                      {restaurantCandidates.length > 0
+                        ? "BiteSync is ready to show the places everyone liked."
+                        : "No matching restaurants yet for the shared categories in this city."}
+                    </p>
+                    <button
+                      onClick={() => onChangeStage("final")}
+                      className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
+                    >
+                      Show final picks
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {stage === "final" ? (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl bg-white/6 p-4">
+                  <p className="text-lg font-semibold text-white">Final matches</p>
+                  <p className="mt-2 text-sm leading-6 text-white/58">
+                    These are the restaurants liked by everyone in the room. They are sorted from highest rating down.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  {finalRestaurants.length > 0 ? (
+                    finalRestaurants.map((restaurant) => (
+                      <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-white">{restaurant.name}</p>
+                            <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                            <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
+                      No restaurant has been liked by everyone yet. Keep swiping or wait for the rest of the room to
+                      finish.
+                    </div>
+                  )}
+                </div>
+
+                <button onClick={() => onChangeStage("restaurants")} className={ghostButtonClass}>
+                  Back to restaurant cards
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+            <div className="flex flex-wrap gap-2 text-xs text-white/55">
+              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                Shared categories: {sharedCategoryIds.length}
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                Category likes: {categoryVotesCount}
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                Restaurant likes: {restaurantVotesCount}
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                City places: {cityRestaurants.length}
+              </span>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function SwipePanel<T>({
+  item,
+  nextItem,
+  likeLabel,
+  skipLabel,
+  onLike,
+  onSkip,
+  renderCard,
+}: {
+  item: T;
+  nextItem: T | null;
+  likeLabel: string;
+  skipLabel: string;
+  onLike: () => void;
+  onSkip: () => void;
+  renderCard: (item: T) => React.ReactNode;
+}) {
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const startXRef = useRef(0);
+
+  const reset = useCallback(() => {
+    setDragX(0);
+    setDragging(false);
+  }, []);
+
+  const commit = useCallback(
+    (direction: "like" | "skip") => {
+      setDragX(direction === "like" ? 420 : -420);
+      window.setTimeout(() => {
+        reset();
+        if (direction === "like") {
+          onLike();
+        } else {
+          onSkip();
+        }
+      }, 140);
+    },
+    [onLike, onSkip, reset],
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="relative h-[340px] touch-none select-none">
+        {nextItem ? (
+          <div className="absolute inset-x-3 top-3 scale-[0.96] opacity-45">{renderCard(nextItem)}</div>
+        ) : null}
+
+        <div
+          onPointerDown={(event) => {
+            startXRef.current = event.clientX;
+            setDragging(true);
+          }}
+          onPointerMove={(event) => {
+            if (!dragging) return;
+            setDragX(event.clientX - startXRef.current);
+          }}
+          onPointerUp={() => {
+            if (dragX > 90) {
+              commit("like");
+              return;
+            }
+            if (dragX < -90) {
+              commit("skip");
+              return;
+            }
+            reset();
+          }}
+          onPointerCancel={reset}
+          className="absolute inset-0 will-change-transform"
+          style={{
+            transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)`,
+            transition: dragging ? "none" : "transform 160ms ease-out",
+          }}
+        >
+          <div className="relative h-full">
+            {Math.abs(dragX) > 18 ? (
+              <div
+                className={`absolute left-4 top-4 z-10 rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] ${
+                  dragX > 0
+                    ? "border-emerald-300/50 bg-emerald-300/14 text-emerald-200"
+                    : "border-rose-300/50 bg-rose-300/14 text-rose-200"
+                }`}
+              >
+                {dragX > 0 ? likeLabel : skipLabel}
+              </div>
+            ) : null}
+            {renderCard(item)}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <button onClick={() => commit("skip")} className={swipeGhostButtonClass}>
+          Swipe left
+        </button>
+        <button onClick={() => commit("like")} className={swipePrimaryButtonClass}>
+          Swipe right
+        </button>
       </div>
     </div>
   );
@@ -1051,6 +1635,40 @@ function createRoomCode(city: string) {
   return `${cityCode}-${suffix}`;
 }
 
+function getSharedLikedIds<T extends { user_id: string | null; decision: "like" | "skip" }>(params: {
+  votes: T[];
+  itemKey: "category_id" | "restaurant_id";
+  memberCount: number;
+  fallbackVotes: T[];
+}) {
+  const { votes, itemKey, memberCount, fallbackVotes } = params;
+
+  const likedCounts = new Map<string, Set<string>>();
+  for (const vote of votes) {
+    const itemId = (vote as T & Record<string, string>)[itemKey];
+    if (!itemId || vote.decision !== "like" || !vote.user_id) continue;
+    const users = likedCounts.get(itemId) ?? new Set<string>();
+    users.add(vote.user_id);
+    likedCounts.set(itemId, users);
+  }
+
+  const shared = Array.from(likedCounts.entries())
+    .filter(([, users]) => users.size >= memberCount)
+    .map(([itemId]) => itemId);
+
+  if (shared.length > 0) {
+    return shared;
+  }
+
+  if (memberCount === 1) {
+    return fallbackVotes
+      .filter((vote) => vote.decision === "like")
+      .map((vote) => (vote as T & Record<string, string>)[itemKey]);
+  }
+
+  return [];
+}
+
 const fieldClass =
   "w-full rounded-[22px] border border-white/10 bg-white/6 px-4 py-2.5 text-sm text-white outline-none transition focus:border-white/28";
 
@@ -1068,3 +1686,9 @@ const primaryCardClass =
 
 const menuItemClass =
   "w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-white/80 transition hover:bg-white/8";
+
+const swipeGhostButtonClass =
+  "w-full rounded-full border border-white/10 bg-white/6 px-5 py-3 font-semibold text-white/78";
+
+const swipePrimaryButtonClass =
+  "w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950";
