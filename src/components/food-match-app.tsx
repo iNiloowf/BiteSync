@@ -10,7 +10,13 @@ import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@
 type Screen = "auth" | "home" | "profile" | "room";
 type AuthMode = "signin" | "signup";
 type RoomMode = "host" | "join";
-type RoomStage = "lobby" | "categories" | "restaurants" | "final";
+type RoomStage =
+  | "lobby"
+  | "categories"
+  | "waiting_categories"
+  | "category_match"
+  | "restaurants"
+  | "final";
 
 type Profile = {
   id: string;
@@ -32,6 +38,7 @@ type RoomMember = {
   id: string;
   name: string;
   joined_at: string;
+  user_id: string | null;
 };
 
 type CityRestaurant = {
@@ -106,6 +113,16 @@ type ErrorLike = {
   message?: string;
   code?: string;
 };
+
+function categoryVoteKey(vote: RoomCategoryVote): string {
+  if (vote.user_id) return vote.user_id;
+  if (vote.member_name) return `n:${vote.member_name}`;
+  return "";
+}
+
+function roomMemberKey(member: RoomMember): string {
+  return member.user_id ?? `n:${member.name}`;
+}
 
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
@@ -265,6 +282,7 @@ export function FoodMatchApp() {
           id: `local-${memberName}`,
           name: memberName,
           joined_at: new Date().toISOString(),
+          user_id: null,
         },
       ];
     });
@@ -303,9 +321,63 @@ export function FoodMatchApp() {
     [categoryVotes, memberCount, myCategoryVotes],
   );
 
+  const categoryDeckSize = categories.length;
+
+  const memberCategoryProgress = useMemo(() => {
+    const perVoter = new Map<string, Set<string>>();
+    for (const vote of categoryVotes) {
+      const key = categoryVoteKey(vote);
+      if (!key) continue;
+      const set = perVoter.get(key) ?? new Set<string>();
+      set.add(vote.category_id);
+      perVoter.set(key, set);
+    }
+    return perVoter;
+  }, [categoryVotes]);
+
+  const allMembersFinishedCategories = useMemo(() => {
+    if (memberCount <= 1) return true;
+    if (visibleRoomMembers.length === 0) return false;
+    for (const member of visibleRoomMembers) {
+      const set = memberCategoryProgress.get(roomMemberKey(member));
+      if (!set || set.size < categoryDeckSize) return false;
+    }
+    return true;
+  }, [memberCount, visibleRoomMembers, memberCategoryProgress, categoryDeckSize]);
+
+  const membersStillSwipingCategories = useMemo(() => {
+    if (memberCount <= 1) return [] as RoomMember[];
+    return visibleRoomMembers.filter((member) => {
+      const set = memberCategoryProgress.get(roomMemberKey(member));
+      return !set || set.size < categoryDeckSize;
+    });
+  }, [memberCount, visibleRoomMembers, memberCategoryProgress, categoryDeckSize]);
+
   const soloLikedCategoryIds = useMemo(
     () => myCategoryVotes.filter((vote) => vote.decision === "like").map((vote) => vote.category_id),
     [myCategoryVotes],
+  );
+
+  const unionLikedCategoryIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const vote of categoryVotes) {
+      if (vote.decision === "like") ids.add(vote.category_id);
+    }
+    return [...ids];
+  }, [categoryVotes]);
+
+  const restaurantFocusCategoryIds = useMemo(() => {
+    if (sharedCategoryIds.length > 0) return sharedCategoryIds;
+    if (memberCount <= 1) return soloLikedCategoryIds;
+    return unionLikedCategoryIds;
+  }, [sharedCategoryIds, memberCount, soloLikedCategoryIds, unionLikedCategoryIds]);
+
+  const restaurantFocusCategories = useMemo(
+    () =>
+      restaurantFocusCategoryIds
+        .map((id) => categories.find((c) => c.id === id))
+        .filter((c): c is Category => Boolean(c)),
+    [restaurantFocusCategoryIds],
   );
 
   const myLikedCategoriesInVoteOrder = useMemo(() => {
@@ -325,14 +397,21 @@ export function FoodMatchApp() {
 
   const diningPlacesFetchKey = useMemo(() => {
     if (!activeRoom) return "";
-    if (roomStage !== "restaurants" && roomStage !== "final") {
+    const wantsPlaces =
+      roomStage === "restaurants" || roomStage === "final" || roomStage === "category_match";
+    if (!wantsPlaces) {
       return `${activeRoom.id}-preload`;
     }
 
-    const focusIds = sharedCategoryIds.length > 0 ? sharedCategoryIds : soloLikedCategoryIds;
+    const focusIds =
+      restaurantFocusCategoryIds.length > 0
+        ? restaurantFocusCategoryIds
+        : memberCount === 1
+          ? soloLikedCategoryIds
+          : [];
 
     return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}`;
-  }, [activeRoom, roomStage, sharedCategoryIds, soloLikedCategoryIds]);
+  }, [activeRoom, roomStage, restaurantFocusCategoryIds, soloLikedCategoryIds, memberCount]);
 
   const restaurantCandidates = useMemo(() => {
     const sortByRating = (left: CityRestaurant, right: CityRestaurant) => {
@@ -346,24 +425,23 @@ export function FoodMatchApp() {
       return (right.rating ?? 0) - (left.rating ?? 0);
     };
 
+    const focusIds = restaurantFocusCategoryIds;
+
     const primary = visibleCityRestaurants
       .filter((restaurant) =>
-        sharedCategoryIds.length === 0
+        focusIds.length === 0
           ? memberCount === 1 &&
             restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
-          : restaurant.categoryIds.some((categoryId) => sharedCategoryIds.includes(categoryId)),
+          : restaurant.categoryIds.some((categoryId) => focusIds.includes(categoryId)),
       )
       .sort(sortByRating);
 
-    if (
-      primary.length > 0 ||
-      !(memberCount === 1 && soloLikedCategoryIds.length > 0 && visibleCityRestaurants.length > 0)
-    ) {
-      return primary;
+    if (primary.length > 0) return primary;
+    if (visibleCityRestaurants.length > 0) {
+      return [...visibleCityRestaurants].sort(sortByRating);
     }
-
-    return [...visibleCityRestaurants].sort(sortByRating);
-  }, [memberCount, sharedCategoryIds, soloLikedCategoryIds, visibleCityRestaurants]);
+    return primary;
+  }, [memberCount, restaurantFocusCategoryIds, soloLikedCategoryIds, visibleCityRestaurants]);
 
   const myRestaurantVotes = useMemo(
     () =>
@@ -724,6 +802,8 @@ export function FoodMatchApp() {
             (vote.user_id == null && vote.member_name === profile.full_name)),
       );
 
+      let votesSnapshot = categoryVotes;
+
       if (!alreadyVoted) {
         const insertError = await insertCategoryVote({
           room_id: activeRoom.id,
@@ -742,6 +822,8 @@ export function FoodMatchApp() {
           category_id: categoryId,
           decision,
         };
+
+        votesSnapshot = [...categoryVotes, optimistic];
 
         setCategoryVotes((prev) => {
           if (
@@ -763,9 +845,32 @@ export function FoodMatchApp() {
       setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${picked?.title ?? categoryId}`);
 
       const remaining = pendingCategories.filter((category) => category.id !== categoryId);
-      if (remaining.length === 0) {
-        setRoomStage("restaurants");
+      if (remaining.length > 0) {
+        return;
       }
+
+      if (memberCount <= 1) {
+        setRoomStage("restaurants");
+        return;
+      }
+
+      const progress = new Map<string, Set<string>>();
+      for (const vote of votesSnapshot) {
+        const key = categoryVoteKey(vote);
+        if (!key) continue;
+        const set = progress.get(key) ?? new Set<string>();
+        set.add(vote.category_id);
+        progress.set(key, set);
+      }
+
+      const everyoneDone =
+        visibleRoomMembers.length > 0 &&
+        visibleRoomMembers.every((member) => {
+          const set = progress.get(roomMemberKey(member));
+          return Boolean(set && set.size >= categoryDeckSize);
+        });
+
+      setRoomStage(everyoneDone ? "category_match" : "waiting_categories");
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not save your category vote."));
     }
@@ -843,7 +948,7 @@ export function FoodMatchApp() {
     async function loadMembers() {
       const { data, error } = await client
         .from("room_members")
-        .select("id,name,joined_at")
+        .select("id,name,joined_at,user_id")
         .eq("room_id", roomId)
         .order("joined_at", { ascending: true });
 
@@ -853,7 +958,14 @@ export function FoodMatchApp() {
         return;
       }
 
-      setRoomMembers(((data as RoomMember[] | null) ?? []).filter(Boolean));
+      const rows = ((data as (RoomMember & { user_id?: string | null })[] | null) ?? [])
+        .filter(Boolean)
+        .map((row) => ({
+          ...row,
+          user_id: row.user_id ?? null,
+        }));
+
+      setRoomMembers(rows);
     }
 
     void loadMembers();
@@ -1005,6 +1117,33 @@ export function FoodMatchApp() {
   }, [activeRoom, supabase]);
 
   useEffect(() => {
+    if (roomStage !== "waiting_categories") {
+      return;
+    }
+    if (!allMembersFinishedCategories) {
+      return;
+    }
+    setRoomStage("category_match");
+  }, [roomStage, allMembersFinishedCategories]);
+
+  useEffect(() => {
+    if (!activeRoom) {
+      return;
+    }
+    if (roomStage !== "categories") {
+      return;
+    }
+    if (pendingCategories.length > 0) {
+      return;
+    }
+    if (memberCount <= 1) {
+      setRoomStage("restaurants");
+      return;
+    }
+    setRoomStage(allMembersFinishedCategories ? "category_match" : "waiting_categories");
+  }, [activeRoom, roomStage, pendingCategories.length, memberCount, allMembersFinishedCategories]);
+
+  useEffect(() => {
     if (!activeRoom) {
       return;
     }
@@ -1013,8 +1152,14 @@ export function FoodMatchApp() {
     const controller = new AbortController();
     const roomCity = activeRoom.city;
     const roomCountry = activeRoom.country_code;
-    const enrich = roomStage === "restaurants" || roomStage === "final";
-    const focusIds = sharedCategoryIds.length > 0 ? sharedCategoryIds : soloLikedCategoryIds;
+    const enrich =
+      roomStage === "restaurants" || roomStage === "final" || roomStage === "category_match";
+    const focusIds =
+      restaurantFocusCategoryIds.length > 0
+        ? restaurantFocusCategoryIds
+        : memberCount === 1
+          ? soloLikedCategoryIds
+          : [];
 
     async function loadRestaurants() {
       setRestaurantsLoading(true);
@@ -1180,6 +1325,8 @@ export function FoodMatchApp() {
                 categoryVotes={categoryVotes}
                 restaurantVotes={restaurantVotes}
                 sharedCategoryIds={sharedCategoryIds}
+                restaurantFocusCategories={restaurantFocusCategories}
+                membersStillSwipingCategories={membersStillSwipingCategories}
                 cityRestaurants={visibleCityRestaurants}
                 pendingCategories={pendingCategories}
                 pendingRestaurants={pendingRestaurants}
@@ -1189,6 +1336,7 @@ export function FoodMatchApp() {
                 myLikedCategoriesInVoteOrder={myLikedCategoriesInVoteOrder}
                 onStart={() => setRoomStage("categories")}
                 onChangeStage={setRoomStage}
+                onStartRestaurantRound={() => setRoomStage("restaurants")}
                 onCategoryDecision={handleCategoryDecision}
                 onRestaurantDecision={handleRestaurantDecision}
                 onBack={() => {
@@ -1647,6 +1795,17 @@ function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
   );
 }
 
+function roomStageFlowLabel(stage: RoomStage) {
+  switch (stage) {
+    case "waiting_categories":
+      return "wait · categories";
+    case "category_match":
+      return "match · categories";
+    default:
+      return stage;
+  }
+}
+
 function RoomScreen({
   room,
   mode,
@@ -1655,6 +1814,8 @@ function RoomScreen({
   categoryVotes,
   restaurantVotes,
   sharedCategoryIds,
+  restaurantFocusCategories,
+  membersStillSwipingCategories,
   cityRestaurants,
   pendingCategories,
   pendingRestaurants,
@@ -1664,6 +1825,7 @@ function RoomScreen({
   myLikedCategoriesInVoteOrder,
   onStart,
   onChangeStage,
+  onStartRestaurantRound,
   onCategoryDecision,
   onRestaurantDecision,
   onBack,
@@ -1675,6 +1837,8 @@ function RoomScreen({
   categoryVotes: RoomCategoryVote[];
   restaurantVotes: RoomRestaurantVote[];
   sharedCategoryIds: string[];
+  restaurantFocusCategories: Category[];
+  membersStillSwipingCategories: RoomMember[];
   cityRestaurants: CityRestaurant[];
   pendingCategories: typeof categories;
   pendingRestaurants: CityRestaurant[];
@@ -1684,6 +1848,7 @@ function RoomScreen({
   myLikedCategoriesInVoteOrder: Category[];
   onStart: () => void;
   onChangeStage: (value: RoomStage) => void;
+  onStartRestaurantRound: () => void;
   onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
   onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void;
   onBack: () => void;
@@ -1711,6 +1876,60 @@ function RoomScreen({
 
   const swipeStages = (
     <>
+      {stage === "waiting_categories" ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-3 text-center">
+          <p className="text-xs font-medium uppercase tracking-[0.28em] text-white/40">Categories</p>
+          <h2 className="text-2xl font-semibold text-white">Wait for others</h2>
+          <p className="max-w-[300px] text-sm leading-6 text-white/58">
+            Everyone in the room needs to finish each food style before you continue together.
+          </p>
+          {membersStillSwipingCategories.length > 0 ? (
+            <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-left">
+              <p className="text-xs uppercase tracking-wide text-white/38">Still swiping</p>
+              <ul className="mt-2 space-y-1.5 text-sm text-white/85">
+                {membersStillSwipingCategories.map((member) => (
+                  <li key={roomMemberKey(member)}>{member.name}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {stage === "category_match" ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 pb-2">
+          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/8 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-100/80">Next step</p>
+            <h2 className="mt-2 text-xl font-semibold text-white">
+              {sharedCategoryIds.length > 0 ? "Categories you all liked" : "Categories for this round"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-white/58">
+              {sharedCategoryIds.length > 0
+                ? "Places below follow these shared picks. Tap Start when everyone is ready to swipe restaurants."
+                : "No single style was liked by everyone, so we combine what people liked to build your deck."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {restaurantFocusCategories.length > 0 ? (
+              restaurantFocusCategories.map((cat) => (
+                <span
+                  key={cat.id}
+                  className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/8 px-3 py-1.5 text-sm text-white/90"
+                >
+                  <span>{cat.emoji}</span>
+                  {cat.title}
+                </span>
+              ))
+            ) : (
+              <p className="text-sm text-white/50">We will pull a broad set of places for your city.</p>
+            )}
+          </div>
+          <button type="button" onClick={onStartRestaurantRound} className={primaryButtonClass}>
+            Start
+          </button>
+        </div>
+      ) : null}
+
       {stage === "categories" ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
           <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
@@ -1756,15 +1975,8 @@ function RoomScreen({
                 )}
               />
             ) : (
-              <div className="rounded-2xl bg-white/6 p-3 text-center">
-                <p className="text-xs font-medium text-white/80">Categories complete.</p>
-                <button
-                  type="button"
-                  onClick={() => onChangeStage("restaurants")}
-                  className={`${primaryButtonCompactClass} mt-3`}
-                >
-                  Continue to restaurants
-                </button>
+              <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl bg-white/6 p-4 text-center text-sm text-white/55">
+                Updating room…
               </div>
             )}
           </div>
@@ -1773,6 +1985,22 @@ function RoomScreen({
 
       {stage === "restaurants" ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          {restaurantFocusCategories.length > 0 ? (
+            <div className="shrink-0 rounded-xl border border-white/10 bg-white/6 px-3 py-2">
+              <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Matching on</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {restaurantFocusCategories.map((cat) => (
+                  <span
+                    key={cat.id}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium text-white/88"
+                  >
+                    <span>{cat.emoji}</span>
+                    {cat.title}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
             {pendingRestaurants.length} left
           </div>
@@ -1812,9 +2040,9 @@ function RoomScreen({
       {stage === "final" ? (
         <div className="space-y-4">
           <div className="rounded-2xl bg-white/6 p-4">
-            <p className="text-lg font-semibold text-white">Final matches</p>
+            <p className="text-lg font-semibold text-white">{"Everyone's picks"}</p>
             <p className="mt-2 text-sm leading-6 text-white/58">
-              These are the restaurants liked by everyone in the room. They are sorted from highest rating down.
+              Restaurants liked by everyone in the room, highest rating first.
             </p>
           </div>
 
@@ -1897,7 +2125,7 @@ function RoomScreen({
             <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm text-white/55">Room flow</p>
-                <span className="text-xs uppercase tracking-[0.22em] text-white/45">{stage}</span>
+                <span className="text-xs uppercase tracking-[0.22em] text-white/45">{roomStageFlowLabel(stage)}</span>
               </div>
 
               <div className="mt-4 space-y-3">
@@ -1957,6 +2185,14 @@ function RoomScreen({
 
       {immersive ? (
         <div className="room-swipe-reveal flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
+          {stage === "waiting_categories" || stage === "category_match" ? (
+            <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2">
+              <button type="button" onClick={onBack} className={ghostButtonClass}>
+                Leave room
+              </button>
+              <span className="text-[11px] text-white/40">{room?.code}</span>
+            </div>
+          ) : null}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-2">{swipeStages}</div>
           {(stage === "categories" || stage === "restaurants") &&
           (swipePickLabel || (stage === "categories" && myLikedCategoriesInVoteOrder.length > 0)) ? (
