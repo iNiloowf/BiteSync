@@ -10,6 +10,7 @@ import {
   type Category,
   type Restaurant,
 } from "@/data/mock-data";
+import { hasSupabaseEnv } from "@/lib/supabase";
 
 type Step = "intro" | "profile" | "room" | "share" | "categories" | "restaurants" | "summary";
 type Role = "host" | "guest";
@@ -262,19 +263,26 @@ export function FoodMatchApp() {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#120f14] text-white">
+    <main className="h-[100dvh] overflow-hidden bg-[#120f14] text-white">
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -left-20 top-0 h-72 w-72 rounded-full bg-fuchsia-500/20 blur-3xl" />
         <div className="absolute right-0 top-20 h-80 w-80 rounded-full bg-orange-400/20 blur-3xl" />
         <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-cyan-400/15 blur-3xl" />
       </div>
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[560px] px-3 py-3 sm:px-4 sm:py-6">
-        <div className="flex w-full flex-col rounded-[32px] border border-white/10 bg-[#0f0d11]/88 shadow-[0_40px_140px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+      <div className="relative mx-auto flex h-full w-full max-w-[560px] px-2 py-2 sm:px-4 sm:py-4">
+        <div className="flex h-full w-full flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#0f0d11]/88 shadow-[0_40px_140px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:rounded-[32px]">
           <div className="flex items-center justify-between px-4 pt-4 text-xs font-semibold uppercase tracking-[0.24em] text-white/45 sm:px-5">
             <span>BiteSync</span>
             <span>{Math.round(progress)}%</span>
           </div>
+          {!hasSupabaseEnv ? (
+            <div className="px-4 pt-3 sm:px-5">
+              <div className="rounded-full border border-amber-400/20 bg-amber-400/10 px-4 py-2 text-[11px] font-medium text-amber-100">
+                Real shared rooms need Supabase env keys in Vercel.
+              </div>
+            </div>
+          ) : null}
           <div className="px-4 pt-3 sm:px-5">
             <div className="h-1.5 rounded-full bg-white/8">
               <div
@@ -284,7 +292,7 @@ export function FoodMatchApp() {
             </div>
           </div>
 
-          <div className="min-h-[100svh] px-4 pb-5 pt-6 sm:min-h-[760px] sm:px-5">
+          <div className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
               {step === "intro" ? (
                 <IntroScreen
                   hasSavedProfile={hasSavedProfile}
@@ -410,22 +418,22 @@ function IntroScreen({
   onGuest: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col justify-between">
+    <div className="flex h-full flex-col justify-between gap-5 overflow-hidden">
       <div>
         <div className="inline-flex rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/75">
           BiteSync
         </div>
-        <h1 className="mt-6 text-5xl font-semibold leading-[0.94] text-white">
+        <h1 className="mt-5 text-4xl font-semibold leading-[0.94] text-white sm:text-5xl">
           Dinner picks.
           <br />
           Zero group drama.
         </h1>
-        <p className="mt-5 text-base leading-8 text-white/62">
+        <p className="mt-4 text-sm leading-7 text-white/62 sm:text-base">
           Save your profile once, host a room, let everyone join with a QR, then swipe food styles and restaurants like Tinder.
         </p>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {hasSavedProfile ? (
           <div className="rounded-[28px] border border-white/10 bg-white/6 p-5">
             <p className="text-sm text-white/55">Signed in as</p>
@@ -646,7 +654,7 @@ function CategorySwipeScreen({
         onPointerMove={(event) => onPointerMove(event.clientX)}
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
-        className={`relative z-10 h-[500px] w-full touch-none select-none rounded-[38px] bg-gradient-to-br ${currentCategory.accent} p-6 shadow-[0_30px_90px_rgba(0,0,0,0.24)] transition-transform`}
+        className={`relative z-10 h-[min(48dvh,500px)] min-h-[360px] w-full touch-none select-none rounded-[34px] bg-gradient-to-br ${currentCategory.accent} p-5 shadow-[0_30px_90px_rgba(0,0,0,0.24)] transition-transform sm:rounded-[38px] sm:p-6`}
         style={{ transform: `translateX(${dragX}px) rotate(${dragX / 15}deg)` }}
       >
         <SwipeBadges dragX={dragX} />
@@ -658,8 +666,8 @@ function CategorySwipeScreen({
               </span>
               <span className="rounded-[24px] bg-white/70 px-4 py-3 text-5xl">{currentCategory.emoji}</span>
             </div>
-            <h2 className="mt-6 text-5xl font-semibold text-stone-950">{currentCategory.title}</h2>
-            <p className="mt-4 max-w-sm text-lg leading-8 text-stone-800/80">{currentCategory.blurb}</p>
+            <h2 className="mt-5 text-4xl font-semibold text-stone-950 sm:text-5xl">{currentCategory.title}</h2>
+            <p className="mt-3 max-w-sm text-base leading-7 text-stone-800/80 sm:text-lg sm:leading-8">{currentCategory.blurb}</p>
           </div>
 
           <div className="grid gap-3">
@@ -721,7 +729,7 @@ function RestaurantSwipeScreen({
         onPointerMove={(event) => onPointerMove(event.clientX)}
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
-        className="relative z-10 h-[540px] w-full touch-none select-none overflow-hidden rounded-[38px] border border-white/10 bg-[#1b161d] shadow-[0_30px_90px_rgba(0,0,0,0.28)] transition-transform"
+        className="relative z-10 h-[min(52dvh,540px)] min-h-[390px] w-full touch-none select-none overflow-hidden rounded-[34px] border border-white/10 bg-[#1b161d] shadow-[0_30px_90px_rgba(0,0,0,0.28)] transition-transform sm:rounded-[38px]"
         style={{ transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)` }}
       >
         <SwipeBadges dragX={dragX} />
@@ -759,8 +767,8 @@ function RestaurantSwipeScreen({
                   );
                 })}
               </div>
-              <h2 className="mt-5 text-4xl font-semibold leading-tight text-white">{currentRestaurant.name}</h2>
-              <p className="mt-3 text-base leading-7 text-white/72">{currentRestaurant.vibe}</p>
+              <h2 className="mt-5 text-3xl font-semibold leading-tight text-white sm:text-4xl">{currentRestaurant.name}</h2>
+              <p className="mt-3 text-sm leading-6 text-white/72 sm:text-base sm:leading-7">{currentRestaurant.vibe}</p>
               <div className="mt-5 flex items-center gap-3 text-sm font-medium text-white/76">
                 <span>{currentRestaurant.priceLevel}</span>
                 <span className="h-1 w-1 rounded-full bg-white/40" />
@@ -790,7 +798,7 @@ function SummaryScreen({
   onOpenMenu: (restaurant: Restaurant, item: Restaurant["menuPreviews"][number]) => void;
 }) {
   return (
-    <div className="flex h-full flex-col gap-5">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className={ghostButtonClass}>
           Back
@@ -820,7 +828,7 @@ function SummaryScreen({
         </div>
       </div>
 
-      <div className="space-y-3 overflow-y-auto pr-1">
+      <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
         {shortlistedRestaurants.map((restaurant) => (
           <div key={restaurant.id} className="rounded-[28px] border border-white/10 bg-white/6 p-4">
             <div className="flex items-start justify-between gap-3">
@@ -891,7 +899,7 @@ function ScreenShell({
   actionLabel: string;
 }) {
   return (
-    <div className="flex h-full flex-col gap-6">
+    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className={ghostButtonClass}>
           Back
@@ -902,11 +910,11 @@ function ScreenShell({
       </div>
 
       <div>
-        <h1 className="text-4xl font-semibold leading-tight text-white">{title}</h1>
-        <p className="mt-4 text-base leading-8 text-white/58">{subtitle}</p>
+        <h1 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">{title}</h1>
+        <p className="mt-3 text-sm leading-7 text-white/58 sm:text-base sm:leading-8">{subtitle}</p>
       </div>
 
-      <div className="flex-1">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
 
       <button
         onClick={onAction}
@@ -934,7 +942,7 @@ function SwipeShell({
   onBack: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col gap-5">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className={ghostButtonClass}>
           Back
@@ -945,8 +953,8 @@ function SwipeShell({
       </div>
 
       <div>
-        <h1 className="text-4xl font-semibold leading-tight text-white">{title}</h1>
-        <p className="mt-3 text-base leading-8 text-white/58">{subtitle}</p>
+        <h1 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">{title}</h1>
+        <p className="mt-2 text-sm leading-7 text-white/58 sm:text-base sm:leading-8">{subtitle}</p>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -963,7 +971,7 @@ function SwipeShell({
         )}
       </div>
 
-      <div className="relative flex flex-1 items-center justify-center">{children}</div>
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">{children}</div>
     </div>
   );
 }
