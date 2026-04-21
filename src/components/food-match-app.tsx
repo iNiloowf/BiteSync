@@ -124,6 +124,48 @@ function roomMemberKey(member: RoomMember): string {
   return member.user_id ?? `n:${member.name}`;
 }
 
+type SupabaseBrowser = NonNullable<ReturnType<typeof getSupabaseBrowserClient>>;
+
+function mergeMemberRowsFromServer(serverRows: RoomMember[], previous: RoomMember[]): RoomMember[] {
+  const byKey = new Map<string, RoomMember>();
+  for (const row of serverRows) {
+    byKey.set(roomMemberKey(row), row);
+  }
+
+  for (const member of previous) {
+    if (!member.id.startsWith("bc-") && !member.id.startsWith("local-")) continue;
+    const key = roomMemberKey(member);
+    if (byKey.has(key)) continue;
+    if (member.user_id && [...byKey.values()].some((row) => row.user_id === member.user_id)) continue;
+    if (!member.user_id && [...byKey.values()].some((row) => row.name === member.name)) continue;
+    byKey.set(key, member);
+  }
+
+  return [...byKey.values()].sort(
+    (left, right) => new Date(left.joined_at).getTime() - new Date(right.joined_at).getTime(),
+  );
+}
+
+function broadcastRoomMemberJoined(client: SupabaseBrowser, roomId: string, name: string, userId: string) {
+  const channel = client.channel(`room-handshake-${roomId}`);
+  const teardown = () => {
+    window.clearTimeout(failSafe);
+    void client.removeChannel(channel);
+  };
+  const failSafe = window.setTimeout(teardown, 8000);
+  channel.subscribe((status) => {
+    if (status === "SUBSCRIBED") {
+      window.clearTimeout(failSafe);
+      void channel.send({
+        type: "broadcast",
+        event: "member_joined",
+        payload: { name: name.trim(), user_id: userId },
+      });
+      window.setTimeout(teardown, 1500);
+    }
+  });
+}
+
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -790,6 +832,11 @@ export function FoodMatchApp() {
       syncRoomMembers(profile.full_name);
       setRoomMode("join");
       setScreen("room");
+
+      broadcastRoomMemberJoined(supabase, roomData.id, profile.full_name, session.user.id);
+      window.setTimeout(() => {
+        broadcastRoomMemberJoined(supabase, roomData.id, profile.full_name, session.user.id);
+      }, 1400);
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not join room."));
     } finally {
@@ -971,7 +1018,7 @@ export function FoodMatchApp() {
           user_id: row.user_id ?? null,
         }));
 
-      setRoomMembers(rows);
+      setRoomMembers((prev) => mergeMemberRowsFromServer(rows, prev));
     }
 
     void loadMembers();
@@ -1001,6 +1048,38 @@ export function FoodMatchApp() {
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onWindowFocus);
 
+    const handshakeChannel = supabase
+      .channel(`room-handshake-${roomId}`)
+      .on(
+        "broadcast",
+        { event: "member_joined" },
+        ({ payload }: { payload?: { name?: string; user_id?: string | null } }) => {
+          if (!active) return;
+          const name = payload?.name?.trim();
+          if (!name) return;
+          const uid = typeof payload?.user_id === "string" ? payload.user_id : null;
+          setRoomMembers((prev) => {
+            const addition: RoomMember = {
+              id: `bc-${uid ?? `n:${name}`}`,
+              name,
+              user_id: uid,
+              joined_at: new Date().toISOString(),
+            };
+            if (
+              prev.some(
+                (row) =>
+                  (uid && row.user_id === uid) || roomMemberKey(row) === roomMemberKey(addition),
+              )
+            ) {
+              return prev;
+            }
+            return [...prev, addition];
+          });
+          void loadMembers();
+        },
+      )
+      .subscribe();
+
     const channel = supabase
       .channel(`room-members-${activeRoom.id}`)
       .on(
@@ -1027,6 +1106,7 @@ export function FoodMatchApp() {
       window.clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onWindowFocus);
+      void supabase.removeChannel(handshakeChannel);
       void supabase.removeChannel(channel);
     };
   }, [activeRoom, supabase, screen]);
