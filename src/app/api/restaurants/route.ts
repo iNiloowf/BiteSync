@@ -233,7 +233,41 @@ function searchPlacePhrase(city: string, countryLabel: string, regionCode?: stri
 
 type LatLng = { latitude: number; longitude: number };
 
-async function geocodeCityCenter(address: string, apiKey: string, regionCode?: string): Promise<LatLng | null> {
+type GeocodeLatLng = { lat: number; lng: number };
+
+/** Places `Viewport`: southwest = `low`, northeast = `high` (per Google docs). */
+type PlacesRectangle = { low: LatLng; high: LatLng };
+
+/** Geocoding `viewport` / `bounds` for the city string (same city/country as signup → room). */
+type CityGeocodeResult = {
+  center: LatLng;
+  /** When present, restricts Text Search to this rectangle (city footprint from Geocoding). */
+  cityRectangle?: PlacesRectangle;
+};
+
+function geocodePointToLatLng(p: GeocodeLatLng): LatLng {
+  return { latitude: p.lat, longitude: p.lng };
+}
+
+/** Slightly pad the box so edge listings are not clipped. */
+function padPlacesRectangle(rect: PlacesRectangle, padDegrees = 0.02): PlacesRectangle {
+  return {
+    low: {
+      latitude: rect.low.latitude - padDegrees,
+      longitude: rect.low.longitude - padDegrees,
+    },
+    high: {
+      latitude: rect.high.latitude + padDegrees,
+      longitude: rect.high.longitude + padDegrees,
+    },
+  };
+}
+
+async function geocodeCityForSearch(
+  address: string,
+  apiKey: string,
+  regionCode?: string,
+): Promise<CityGeocodeResult | null> {
   const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   url.searchParams.set("address", address);
   url.searchParams.set("key", apiKey);
@@ -243,13 +277,36 @@ async function geocodeCityCenter(address: string, apiKey: string, regionCode?: s
   const res = await fetch(url.toString(), { cache: "no-store" });
   const data = (await res.json()) as {
     status?: string;
-    results?: Array<{ geometry?: { location?: { lat: number; lng: number } } }>;
+    results?: Array<{
+      geometry?: {
+        location?: GeocodeLatLng;
+        viewport?: { southwest?: GeocodeLatLng; northeast?: GeocodeLatLng };
+        bounds?: { southwest?: GeocodeLatLng; northeast?: GeocodeLatLng };
+      };
+    }>;
   };
-  if (data.status !== "OK" || !data.results?.[0]?.geometry?.location) {
+  if (data.status !== "OK") {
     return null;
   }
-  const loc = data.results[0].geometry.location;
-  return { latitude: loc.lat, longitude: loc.lng };
+  const geometry = data.results?.[0]?.geometry;
+  const loc = geometry?.location;
+  if (!geometry || !loc) {
+    return null;
+  }
+  const center = geocodePointToLatLng(loc);
+  const box = geometry.viewport ?? geometry.bounds;
+  const sw = box?.southwest;
+  const ne = box?.northeast;
+  if (sw && ne) {
+    const raw: PlacesRectangle = {
+      low: geocodePointToLatLng(sw),
+      high: geocodePointToLatLng(ne),
+    };
+    if (raw.low.latitude <= raw.high.latitude) {
+      return { center, cityRectangle: padPlacesRectangle(raw) };
+    }
+  }
+  return { center };
 }
 
 /** Drop obvious wrong-country rows when Places still returns cross-border noise. */
@@ -331,7 +388,9 @@ function mergeRoundRobin(buckets: NormalizedPlace[][], maxTotal: number): Normal
 
 type SearchTextOptions = {
   regionCode?: string;
-  /** `locationRestriction` on SearchText only allows rectangles; circles must use `locationBias`. */
+  /** Hard limit: only results inside this box (from Geocoding viewport for the user's city). */
+  locationRestriction?: { rectangle: PlacesRectangle };
+  /** Soft bias when we have a center but no city rectangle (circle not allowed on `locationRestriction`). */
   locationBias?: {
     circle: { center: LatLng; radius: number };
   };
@@ -346,7 +405,9 @@ async function searchTextPlaces(
   if (options?.regionCode) {
     body.regionCode = options.regionCode;
   }
-  if (options?.locationBias) {
+  if (options?.locationRestriction) {
+    body.locationRestriction = options.locationRestriction;
+  } else if (options?.locationBias) {
     body.locationBias = options.locationBias;
   }
   const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
@@ -402,17 +463,13 @@ export async function GET(request: Request) {
 
   try {
     const where = searchPlacePhrase(city, countryLabel, regionCode);
-    const geoCenter = await geocodeCityCenter(where, googleMapsApiKey, regionCode);
-    const searchOpts: SearchTextOptions = {
-      regionCode,
-      ...(geoCenter
-        ? {
-            locationBias: {
-              circle: { center: geoCenter, radius: 52000 },
-            },
-          }
-        : {}),
-    };
+    const geo = await geocodeCityForSearch(where, googleMapsApiKey, regionCode);
+    const searchOpts: SearchTextOptions = { regionCode };
+    if (geo?.cityRectangle) {
+      searchOpts.locationRestriction = { rectangle: geo.cityRectangle };
+    } else if (geo) {
+      searchOpts.locationBias = { circle: { center: geo.center, radius: 52000 } };
+    }
 
     let places: NormalizedPlace[];
 
