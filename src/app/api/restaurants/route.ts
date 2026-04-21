@@ -14,7 +14,13 @@ const fieldMask = [
   "places.primaryType",
   "places.primaryTypeDisplayName",
   "places.types",
+  "places.photos",
 ].join(",");
+
+function toPlacePhotoProxyUrl(photoName: string) {
+  const n = Buffer.from(photoName, "utf8").toString("base64url");
+  return `/api/places-photo?n=${encodeURIComponent(n)}`;
+}
 
 const categoryMatchers: Array<{ id: string; patterns: RegExp[] }> = [
   {
@@ -127,6 +133,7 @@ export async function GET(request: Request) {
         primaryType?: string;
         primaryTypeDisplayName?: { text?: string };
         types?: string[];
+        photos?: Array<{ name?: string }>;
       }>;
       error?: { message?: string };
     };
@@ -146,6 +153,11 @@ export async function GET(request: Request) {
           ...(place.types ?? []),
         ].filter(Boolean);
 
+        const photoUrls = (place.photos ?? [])
+          .map((photo) => (photo.name ? toPlacePhotoProxyUrl(photo.name) : null))
+          .filter((url): url is string => Boolean(url))
+          .slice(0, 8);
+
         return {
           id: place.id,
           name: place.displayName?.text ?? "Unknown place",
@@ -155,6 +167,7 @@ export async function GET(request: Request) {
           priceLevel: formatPriceLevel(place.priceLevel),
           primaryType: place.primaryTypeDisplayName?.text ?? null,
           categoryIds: inferCategoryIds(typeParts),
+          photoUrls,
         };
       }) ?? [];
 

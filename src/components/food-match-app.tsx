@@ -42,6 +42,7 @@ type CityRestaurant = {
   priceLevel: string | null;
   primaryType: string | null;
   categoryIds: string[];
+  photoUrls?: string[];
 };
 
 type RoomCategoryVote = {
@@ -1519,6 +1520,83 @@ function ProfileScreen({
   );
 }
 
+function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const photos = restaurant.photoUrls ?? [];
+
+  return (
+    <div className="flex max-h-[340px] min-h-[260px] flex-col overflow-hidden rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
+      <div className="relative aspect-[16/9] w-full shrink-0 overflow-hidden bg-black/35">
+        {photos[0] ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photos[0]} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <div className="grid h-full min-h-[120px] place-items-center text-xs text-white/40">No image</div>
+        )}
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] uppercase tracking-[0.28em] text-white/38">Restaurant</p>
+            <h3 className="mt-1.5 text-xl font-semibold leading-snug text-white">{restaurant.name}</h3>
+          </div>
+          <div className="shrink-0 rounded-2xl bg-white/8 px-2.5 py-1.5 text-right">
+            <p className="text-base font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+            <p className="text-[10px] text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+          </div>
+        </div>
+
+        <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
+
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-white/70">
+          <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
+            {restaurant.priceLevel ?? "Price unknown"}
+          </span>
+          <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
+            {restaurant.primaryType ?? "Restaurant"}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setMenuOpen((value) => !value)}
+          className="mt-3 w-full shrink-0 rounded-full border border-white/14 bg-white/10 py-2 text-[11px] font-semibold tracking-wide text-white/90 transition hover:bg-white/14"
+        >
+          {menuOpen ? "Hide menu" : "Show menu"}
+        </button>
+
+        {menuOpen ? (
+          <div className="mt-2 min-h-0 space-y-2" onPointerDown={(event) => event.stopPropagation()}>
+            {photos.length === 0 ? (
+              <p className="text-center text-[11px] text-white/45">No photos from Google for this place yet.</p>
+            ) : (
+              <>
+                <p className="text-[10px] leading-snug text-white/38">
+                  Google Places photos (often include menu shots).
+                </p>
+                <div className="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto pr-0.5">
+                  {photos.map((src, index) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={`${restaurant.id}-photo-${index}`}
+                      src={src}
+                      alt=""
+                      className="aspect-[3/4] w-full rounded-lg object-cover"
+                      loading="lazy"
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function RoomScreen({
   room,
   mode,
@@ -1662,29 +1740,7 @@ function RoomScreen({
                 skipLabel="Pass"
                 onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
                 onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
-                renderCard={(restaurant) => (
-                  <div className="min-h-[320px] rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.28em] text-white/38">Restaurant</p>
-                        <h3 className="mt-3 text-3xl font-semibold text-white">{restaurant.name}</h3>
-                      </div>
-                      <div className="rounded-2xl bg-white/8 px-3 py-2 text-right">
-                        <p className="text-lg font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                        <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                      </div>
-                    </div>
-                    <p className="mt-4 text-sm leading-6 text-white/58">{restaurant.address}</p>
-                    <div className="mt-5 flex flex-wrap gap-2 text-xs text-white/70">
-                      <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                        {restaurant.priceLevel ?? "Price unknown"}
-                      </span>
-                      <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                        {restaurant.primaryType ?? "Restaurant"}
-                      </span>
-                    </div>
-                  </div>
-                )}
+                renderCard={(restaurant) => <RestaurantSwipeCard restaurant={restaurant} />}
               />
             ) : (
               <div className="rounded-2xl bg-white/6 p-3 text-center">
