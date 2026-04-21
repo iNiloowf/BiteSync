@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 
 import { categories, countries, type Category } from "@/data/mock-data";
@@ -448,21 +448,6 @@ export function FoodMatchApp() {
     [restaurantFocusCategoryIds],
   );
 
-  const myLikedCategoriesInVoteOrder = useMemo(() => {
-    const out: Category[] = [];
-    const seen = new Set<string>();
-
-    for (const vote of myCategoryVotes) {
-      if (vote.decision !== "like") continue;
-      if (seen.has(vote.category_id)) continue;
-      seen.add(vote.category_id);
-      const cat = categories.find((c) => c.id === vote.category_id);
-      if (cat) out.push(cat);
-    }
-
-    return out;
-  }, [myCategoryVotes]);
-
   const diningPlacesFetchKey = useMemo(() => {
     if (!activeRoom) return "";
     const wantsPlaces =
@@ -870,60 +855,88 @@ export function FoodMatchApp() {
     }
   }
 
-  async function handleCategoryDecision(categoryId: string, decision: "like" | "skip") {
+  async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
 
+    const likeSet = new Set(likeIds);
     const isMyVote = (vote: RoomCategoryVote) =>
       (currentUserId && vote.user_id === currentUserId) ||
       (vote.user_id == null && profile && vote.member_name === profile.full_name);
 
-    try {
-      const alreadyVoted = categoryVotes.some((vote) => vote.category_id === categoryId && isMyVote(vote));
+    const toSubmit = categories.filter(
+      (cat) => !categoryVotes.some((vote) => vote.category_id === cat.id && isMyVote(vote)),
+    );
 
-      const optimistic: RoomCategoryVote = {
-        id: `local-cat-${categoryId}-${Date.now()}`,
-        user_id: currentUserId,
-        member_name: profile.full_name,
-        category_id: categoryId,
-        decision,
-      };
+    if (toSubmit.length === 0) {
+      const votesSnapshot = categoryVotes;
+      const myAnswered = new Set(votesSnapshot.filter(isMyVote).map((v) => v.category_id));
+      if (myAnswered.size < categories.length) return;
 
-      if (!alreadyVoted) {
-        setCategoryVotes((prev) => {
-          if (prev.some((vote) => vote.category_id === categoryId && isMyVote(vote))) return prev;
-          return [...prev, optimistic];
+      if (memberCount <= 1) {
+        setRoomStage("restaurants");
+        return;
+      }
+
+      const progress = new Map<string, Set<string>>();
+      for (const vote of votesSnapshot) {
+        const key = categoryVoteKey(vote);
+        if (!key) continue;
+        const set = progress.get(key) ?? new Set<string>();
+        set.add(vote.category_id);
+        progress.set(key, set);
+      }
+
+      const everyoneDone =
+        visibleRoomMembers.length > 0 &&
+        visibleRoomMembers.every((member) => {
+          const set = progress.get(roomMemberKey(member));
+          return Boolean(set && set.size >= categoryDeckSize);
         });
 
+      setRoomStage(everyoneDone ? "category_match" : "waiting_categories");
+      return;
+    }
+
+    const optimistic: RoomCategoryVote[] = toSubmit.map((cat) => ({
+      id: `local-cat-${cat.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      user_id: currentUserId,
+      member_name: profile.full_name,
+      category_id: cat.id,
+      decision: likeSet.has(cat.id) ? "like" : "skip",
+    }));
+
+    const optimisticIds = new Set(optimistic.map((o) => o.id));
+
+    const votesSnapshot = [
+      ...categoryVotes.filter(
+        (v) => !(isMyVote(v) && toSubmit.some((cat) => cat.id === v.category_id)),
+      ),
+      ...optimistic,
+    ];
+
+    setCategoryVotes((prev) => [
+      ...prev.filter((v) => !(isMyVote(v) && toSubmit.some((cat) => cat.id === v.category_id))),
+      ...optimistic,
+    ]);
+
+    try {
+      for (const cat of toSubmit) {
         const insertError = await insertCategoryVote({
           room_id: activeRoom.id,
           user_id: currentUserId,
           member_name: profile.full_name,
-          category_id: categoryId,
-          decision,
+          category_id: cat.id,
+          decision: likeSet.has(cat.id) ? "like" : "skip",
         });
 
-        if (insertError) {
-          setCategoryVotes((prev) => prev.filter((v) => v.id !== optimistic.id));
-          throw insertError;
-        }
+        if (insertError) throw insertError;
       }
 
-      const picked = categories.find((c) => c.id === categoryId);
-      setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${picked?.title ?? categoryId}`);
+      const likeCount = toSubmit.filter((c) => likeSet.has(c.id)).length;
+      setSwipePickLabel(`Saved · ${likeCount} liked · ${toSubmit.length - likeCount} passed`);
 
-      const answeredCategoryIds = new Set(categoryVotes.filter(isMyVote).map((v) => v.category_id));
-      if (!alreadyVoted) {
-        answeredCategoryIds.add(categoryId);
-      }
-      const remainingCats = categories.filter((c) => !answeredCategoryIds.has(c.id));
-      if (remainingCats.length > 0) {
-        return;
-      }
-
-      let votesSnapshot = categoryVotes;
-      if (!alreadyVoted) {
-        votesSnapshot = [...categoryVotes, optimistic];
-      }
+      const myAnswered = new Set(votesSnapshot.filter(isMyVote).map((v) => v.category_id));
+      if (myAnswered.size < categories.length) return;
 
       if (memberCount <= 1) {
         setRoomStage("restaurants");
@@ -948,7 +961,8 @@ export function FoodMatchApp() {
 
       setRoomStage(everyoneDone ? "category_match" : "waiting_categories");
     } catch (error) {
-      setMessage(getErrorMessage(error, "Could not save your category vote."));
+      setCategoryVotes((prev) => prev.filter((v) => !optimisticIds.has(v.id)));
+      setMessage(getErrorMessage(error, "Could not save your category picks."));
     }
   }
 
@@ -1525,7 +1539,6 @@ export function FoodMatchApp() {
                 mode={roomMode}
                 stage={roomStage}
                 roomMembers={visibleRoomMembers}
-                categoryVotes={categoryVotes}
                 restaurantVotes={restaurantVotes}
                 sharedCategoryIds={sharedCategoryIds}
                 restaurantFocusCategories={restaurantFocusCategories}
@@ -1536,11 +1549,11 @@ export function FoodMatchApp() {
                 restaurantsLoading={restaurantsLoading}
                 loadedPlaceCount={visibleCityRestaurants.length}
                 swipePickLabel={swipePickLabel}
-                myLikedCategoriesInVoteOrder={myLikedCategoriesInVoteOrder}
+                myCategoryVotes={myCategoryVotes}
                 onStart={() => setRoomStage("categories")}
                 onChangeStage={setRoomStage}
                 onStartRestaurantRound={() => setRoomStage("restaurants")}
-                onCategoryDecision={handleCategoryDecision}
+                onCategoryBatchSubmit={handleCategoryBatchSubmit}
                 onRestaurantDecision={handleRestaurantDecision}
                 onRetryPlaces={() => setPlacesFetchNonce((n) => n + 1)}
                 onBack={() => {
@@ -2057,21 +2070,6 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   prev.heroImagePriority === next.heroImagePriority &&
   prev.restaurant.categoryIds.join(",") === next.restaurant.categoryIds.join(","));
 
-const CategorySwipeCard = memo(function CategorySwipeCardInner({ category }: { category: Category }) {
-  return (
-    <div
-      className={`min-h-[min(400px,56dvh)] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures} sm:min-h-[min(428px,58dvh)]`}
-    >
-      <div className="flex h-full min-h-[inherit] flex-col rounded-[31px] bg-[#17131b]/96 p-7 sm:p-8">
-        <div className="text-7xl leading-none sm:text-8xl">{category.emoji}</div>
-        <p className="mt-7 text-xs uppercase tracking-[0.28em] text-white/45 sm:mt-8">Food style</p>
-        <h3 className="mt-3 text-4xl font-semibold leading-tight text-white sm:text-5xl">{category.title}</h3>
-        <p className="mt-4 text-base leading-7 text-white/65 sm:mt-5 sm:text-lg sm:leading-8">{category.blurb}</p>
-      </div>
-    </div>
-  );
-});
-
 function roomStageFlowLabel(stage: RoomStage) {
   switch (stage) {
     case "waiting_categories":
@@ -2088,7 +2086,6 @@ function RoomScreen({
   mode,
   stage,
   roomMembers,
-  categoryVotes,
   restaurantVotes,
   sharedCategoryIds,
   restaurantFocusCategories,
@@ -2099,11 +2096,11 @@ function RoomScreen({
   restaurantsLoading,
   loadedPlaceCount,
   swipePickLabel,
-  myLikedCategoriesInVoteOrder,
+  myCategoryVotes,
   onStart,
   onChangeStage,
   onStartRestaurantRound,
-  onCategoryDecision,
+  onCategoryBatchSubmit,
   onRestaurantDecision,
   onRetryPlaces,
   onBack,
@@ -2112,7 +2109,6 @@ function RoomScreen({
   mode: RoomMode;
   stage: RoomStage;
   roomMembers: RoomMember[];
-  categoryVotes: RoomCategoryVote[];
   restaurantVotes: RoomRestaurantVote[];
   sharedCategoryIds: string[];
   restaurantFocusCategories: Category[];
@@ -2123,21 +2119,34 @@ function RoomScreen({
   restaurantsLoading: boolean;
   loadedPlaceCount: number;
   swipePickLabel: string;
-  myLikedCategoriesInVoteOrder: Category[];
+  myCategoryVotes: RoomCategoryVote[];
   onStart: () => void;
   onChangeStage: (value: RoomStage) => void;
   onStartRestaurantRound: () => void;
-  onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
+  onCategoryBatchSubmit: (likeIds: readonly string[]) => Promise<void>;
   onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void;
   onRetryPlaces: () => void;
   onBack: () => void;
 }) {
-  const currentCategory = pendingCategories[0] ?? null;
-  const nextCategory = pendingCategories[1] ?? null;
   const currentRestaurant = pendingRestaurants[0] ?? null;
   const nextRestaurant = pendingRestaurants[1] ?? null;
 
   const [enterSwipe, setEnterSwipe] = useState(false);
+  const [draftLikeIds, setDraftLikeIds] = useState<Set<string>>(() => new Set());
+  const [categoryBatchSubmitting, setCategoryBatchSubmitting] = useState(false);
+  const categoryDraftSeededRef = useRef(false);
+
+  useEffect(() => {
+    if (stage !== "categories") {
+      categoryDraftSeededRef.current = false;
+    }
+  }, [stage]);
+
+  useLayoutEffect(() => {
+    if (stage !== "categories" || categoryDraftSeededRef.current) return;
+    categoryDraftSeededRef.current = true;
+    setDraftLikeIds(new Set(myCategoryVotes.filter((v) => v.decision === "like").map((v) => v.category_id)));
+  }, [stage, myCategoryVotes]);
 
   const handleStartClick = () => {
     setEnterSwipe(true);
@@ -2146,8 +2155,6 @@ function RoomScreen({
       setEnterSwipe(false);
     }, 520);
   };
-
-  const renderCategoryCard = useCallback((category: Category) => <CategorySwipeCard category={category} />, []);
 
   const showLobbyChrome = stage === "lobby" && !enterSwipe;
   const showStartTransition = stage === "lobby" && enterSwipe;
@@ -2211,44 +2218,84 @@ function RoomScreen({
 
       {stage === "categories" ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-          <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
-            {pendingCategories.length} left
-          </div>
+          <p className="shrink-0 text-[10px] leading-snug text-white/48">
+            Tick what you want for this city. Unticked = pass. Saved rows are locked.
+          </p>
 
-          {myLikedCategoriesInVoteOrder.length > 0 ? (
-            <div className="shrink-0 rounded-lg border border-emerald-400/15 bg-emerald-400/6 px-2 py-1">
-              <div className="flex max-h-6 items-center gap-1 overflow-x-auto overflow-y-hidden whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {myLikedCategoriesInVoteOrder.map((cat) => (
-                  <span
-                    key={cat.id}
-                    className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-white/8 px-1.5 py-0.5 text-[10px] font-medium text-white/85"
-                  >
-                    <span className="text-[11px] leading-none">{cat.emoji}</span>
-                    {cat.title}
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.035] px-0.5 py-0.5">
+            {categories.map((cat) => {
+              const mine = myCategoryVotes.find((v) => v.category_id === cat.id);
+              const locked = Boolean(mine);
+              const checked = locked ? mine!.decision === "like" : draftLikeIds.has(cat.id);
+              return (
+                <label
+                  key={cat.id}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition hover:bg-white/[0.06] ${
+                    locked ? "cursor-default opacity-[0.72]" : ""
+                  }`}
+                >
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-white/12 bg-white/[0.07] text-[15px] leading-none">
+                    {cat.emoji}
                   </span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="min-h-0 flex-1">
-            {currentCategory ? (
-              <SwipePanel
-                key={currentCategory.id}
-                item={currentCategory}
-                nextItem={nextCategory}
-                likeLabel="Like"
-                skipLabel="Pass"
-                onLike={(cat) => onCategoryDecision(cat.id, "like")}
-                onSkip={(cat) => onCategoryDecision(cat.id, "skip")}
-                renderCard={renderCategoryCard}
-              />
-            ) : (
-              <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl bg-white/6 p-4 text-center text-sm text-white/55">
-                Updating room…
-              </div>
-            )}
+                  <span className="min-w-0 flex-1 text-[12px] font-medium leading-tight text-white/88">{cat.title}</span>
+                  <span className="relative grid h-4 w-4 shrink-0 place-items-center">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={locked}
+                      onChange={() => {
+                        if (locked) return;
+                        setDraftLikeIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(cat.id)) next.delete(cat.id);
+                          else next.add(cat.id);
+                          return next;
+                        });
+                      }}
+                      className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-default"
+                    />
+                    <span
+                      className={`pointer-events-none grid h-3.5 w-3.5 place-items-center rounded border ${
+                        checked ? "border-orange-300/55 bg-orange-400/30" : "border-white/22 bg-white/[0.06]"
+                      }`}
+                    >
+                      {checked ? (
+                        <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-white" fill="none" aria-hidden>
+                          <path
+                            d="M2 6l3 3 5-6"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      ) : null}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
           </div>
+
+          <button
+            type="button"
+            disabled={categoryBatchSubmitting}
+            onClick={async () => {
+              setCategoryBatchSubmitting(true);
+              try {
+                await onCategoryBatchSubmit(Array.from(draftLikeIds));
+              } finally {
+                setCategoryBatchSubmitting(false);
+              }
+            }}
+            className={primaryButtonCompactClass}
+          >
+            {categoryBatchSubmitting
+              ? "Saving…"
+              : pendingCategories.length > 0
+                ? "Next · save & show restaurants"
+                : "Next · continue"}
+          </button>
         </div>
       ) : null}
 
@@ -2492,17 +2539,28 @@ function RoomScreen({
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-2">{swipeStages}</div>
           {(stage === "categories" || stage === "restaurants") &&
-          (swipePickLabel || (stage === "categories" && myLikedCategoriesInVoteOrder.length > 0)) ? (
+          (swipePickLabel || (stage === "categories" && draftLikeIds.size > 0)) ? (
             <div className="shrink-0 max-h-11 overflow-hidden border-t border-white/10 bg-[#141117]/95 px-2 py-1">
-              {stage === "categories" && myLikedCategoriesInVoteOrder.length > 0 ? (
-                <p className="truncate text-[10px] leading-tight text-white/55" title={myLikedCategoriesInVoteOrder.map((c) => `${c.emoji} ${c.title}`).join(" · ")}>
+              {stage === "categories" && draftLikeIds.size > 0 ? (
+                <p
+                  className="truncate text-[10px] leading-tight text-white/55"
+                  title={[...draftLikeIds]
+                    .map((id) => categories.find((c) => c.id === id))
+                    .filter(Boolean)
+                    .map((c) => `${c!.emoji} ${c!.title}`)
+                    .join(" · ")}
+                >
                   <span className="text-white/35">Likes:</span>{" "}
-                  {myLikedCategoriesInVoteOrder.map((c) => `${c.emoji}${c.title}`).join(" · ")}
+                  {[...draftLikeIds]
+                    .map((id) => categories.find((c) => c.id === id))
+                    .filter(Boolean)
+                    .map((c) => `${c!.emoji}${c!.title}`)
+                    .join(" · ")}
                 </p>
               ) : null}
               {swipePickLabel ? (
                 <p
-                  className={`truncate text-[10px] leading-tight text-white/70 ${stage === "categories" && myLikedCategoriesInVoteOrder.length > 0 ? "mt-0.5" : ""}`}
+                  className={`truncate text-[10px] leading-tight text-white/70 ${stage === "categories" && draftLikeIds.size > 0 ? "mt-0.5" : ""}`}
                   title={swipePickLabel}
                 >
                   <span className="text-white/35">Last:</span> {swipePickLabel}
