@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { countries } from "@/data/mock-data";
-import { getSupabaseBrowserClient, hasSupabaseEnv } from "@/lib/supabase";
+import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
 
 type Screen = "auth" | "home" | "profile" | "room";
 type AuthMode = "signin" | "signup";
@@ -391,6 +391,14 @@ export function FoodMatchApp() {
             <div className="px-4 pt-3">
               <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
                 Add your Supabase keys to Vercel first to enable real sign up, profile saving, and shared rooms.
+              </div>
+            </div>
+          ) : null}
+
+          {supabaseConfigError ? (
+            <div className="px-4 pt-3">
+              <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                {supabaseConfigError}
               </div>
             </div>
           ) : null}
