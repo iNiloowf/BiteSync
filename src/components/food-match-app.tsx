@@ -1924,42 +1924,107 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   restaurant: CityRestaurant;
   heroImagePriority?: "high" | "low";
 }) {
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const photos = restaurant.photoUrls ?? [];
   const extraPhotos = photos.slice(1);
 
   useEffect(() => {
-    if (!lightboxSrc) return;
+    setLightboxIndex(null);
+  }, [restaurant.id]);
+
+  const lightboxOpen = lightboxIndex !== null && photos.length > 0;
+  const lightboxSrc =
+    lightboxOpen && lightboxIndex !== null ? placePhotoWithSize(photos[lightboxIndex]!, 1280, 960) : null;
+  const canPrev = lightboxIndex !== null && lightboxIndex > 0;
+  const canNext = lightboxIndex !== null && lightboxIndex < photos.length - 1;
+
+  useEffect(() => {
+    if (!lightboxOpen) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [lightboxSrc]);
+  }, [lightboxOpen]);
+
+  useEffect(() => {
+    if (!lightboxOpen || photos.length === 0) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLightboxIndex(null);
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setLightboxIndex((i) => (i !== null ? Math.max(0, i - 1) : i));
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setLightboxIndex((i) => (i !== null ? Math.min(photos.length - 1, i + 1) : i));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxOpen, photos.length]);
 
   const lightbox =
     lightboxSrc &&
+    lightboxIndex !== null &&
     createPortal(
       <div
         className="fixed inset-0 z-[240] flex flex-col bg-black/90 p-3 sm:p-5"
         role="dialog"
         aria-modal="true"
-        aria-label="Photo"
+        aria-label="Photos"
         onClick={(event) => {
           if (event.target === event.currentTarget) {
-            setLightboxSrc(null);
+            setLightboxIndex(null);
           }
         }}
       >
         <button
           type="button"
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setLightboxSrc(null)}
+          onClick={() => setLightboxIndex(null)}
           className="absolute right-3 top-3 z-10 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/90 backdrop-blur-sm transition hover:bg-white/16"
         >
           Close
         </button>
-        <div className="flex min-h-0 flex-1 items-center justify-center pt-10">
+        {photos.length > 1 ? (
+          <p className="pointer-events-none absolute left-1/2 top-14 z-10 -translate-x-1/2 text-xs text-white/55">
+            {lightboxIndex + 1} / {photos.length}
+          </p>
+        ) : null}
+        <div className="relative flex min-h-0 flex-1 items-center justify-center pt-10">
+          {photos.length > 1 ? (
+            <>
+              <button
+                type="button"
+                aria-label="Previous photo"
+                disabled={!canPrev}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i));
+                }}
+                className="absolute left-1 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-white/10 text-lg text-white/90 backdrop-blur-sm transition hover:bg-white/16 disabled:pointer-events-none disabled:opacity-25 sm:left-2 sm:h-12 sm:w-12"
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                aria-label="Next photo"
+                disabled={!canNext}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setLightboxIndex((i) =>
+                    i !== null && i < photos.length - 1 ? i + 1 : i,
+                  );
+                }}
+                className="absolute right-1 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-white/10 text-lg text-white/90 backdrop-blur-sm transition hover:bg-white/16 disabled:pointer-events-none disabled:opacity-25 sm:right-2 sm:h-12 sm:w-12"
+              >
+                ›
+              </button>
+            </>
+          ) : null}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={lightboxSrc}
@@ -1977,18 +2042,26 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
       <div className="flex h-full min-h-[min(260px,48dvh)] w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
         <div className="relative min-h-[min(140px,36dvh)] flex-1 overflow-hidden bg-black/35">
           {photos[0] ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={photos[0]}
-              alt=""
-              width={800}
-              height={600}
-              sizes="(max-width: 480px) 92vw, 432px"
-              className="h-full min-h-[min(140px,36dvh)] w-full object-cover"
-              decoding="async"
-              fetchPriority={heroImagePriority}
-              loading={heroImagePriority === "high" ? "eager" : "lazy"}
-            />
+            <button
+              type="button"
+              aria-label="View photos"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => setLightboxIndex(0)}
+              className="block h-full min-h-[min(140px,36dvh)] w-full cursor-zoom-in p-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={photos[0]}
+                alt=""
+                width={800}
+                height={600}
+                sizes="(max-width: 480px) 92vw, 432px"
+                className="pointer-events-none h-full min-h-[min(140px,36dvh)] w-full object-cover"
+                decoding="async"
+                fetchPriority={heroImagePriority}
+                loading={heroImagePriority === "high" ? "eager" : "lazy"}
+              />
+            </button>
           ) : (
             <div className="flex h-full min-h-[32dvh] items-center justify-center text-sm text-white/40">No image</div>
           )}
@@ -2037,12 +2110,12 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 
           {extraPhotos.length > 0 ? (
             <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {extraPhotos.map((src) => (
+              {extraPhotos.map((src, thumbIndex) => (
                 <button
                   key={src}
                   type="button"
                   onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => setLightboxSrc(placePhotoWithSize(src, 1280, 960))}
+                  onClick={() => setLightboxIndex(thumbIndex + 1)}
                   className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg ring-1 ring-white/20 transition hover:ring-white/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70 sm:h-14 sm:w-14"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}

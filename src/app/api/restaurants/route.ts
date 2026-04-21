@@ -169,36 +169,139 @@ function normalizePlace(place: GooglePlace): NormalizedPlace {
   };
 }
 
+/**
+ * ISO-3166 codes in free-text queries are ambiguous ("CA" = Canada vs California).
+ * Prefer a full country name in the Places text query; still pass `regionCode` on the request separately.
+ */
+function countryLabelForTextQuery(countryParam: string): string {
+  const raw = countryParam.trim();
+  if (!raw) return raw;
+  if (raw.length > 3 && !/^[A-Za-z]{2}$/.test(raw)) {
+    return raw;
+  }
+  const upper = raw.toUpperCase();
+  const iso2ToName: Record<string, string> = {
+    CA: "Canada",
+    US: "United States",
+    AE: "United Arab Emirates",
+    GB: "United Kingdom",
+    AU: "Australia",
+    MX: "Mexico",
+    IN: "India",
+    FR: "France",
+    DE: "Germany",
+    JP: "Japan",
+    KR: "South Korea",
+  };
+  return iso2ToName[upper] ?? raw;
+}
+
+/**
+ * Richer place phrases reduce wrong-country matches (e.g. "CA" as California, or US cities with same names).
+ * Canadian cities include province so Google anchors to the correct country.
+ */
+function searchPlacePhrase(city: string, countryLabel: string, regionCode?: string): string {
+  const trimmed = city.trim();
+  const key = trimmed.toLowerCase().replace(/[^a-z]/g, "");
+  if (regionCode === "CA") {
+    const provinceCity: Record<string, string> = {
+      calgary: "Calgary, AB",
+      edmonton: "Edmonton, AB",
+      reddeer: "Red Deer, AB",
+      lethbridge: "Lethbridge, AB",
+      medicinehat: "Medicine Hat, AB",
+      toronto: "Toronto, ON",
+      mississauga: "Mississauga, ON",
+      ottawa: "Ottawa, ON",
+      hamilton: "Hamilton, ON",
+      london: "London, ON",
+      vancouver: "Vancouver, BC",
+      victoria: "Victoria, BC",
+      kelowna: "Kelowna, BC",
+      montreal: "Montreal, QC",
+      quebeccity: "Quebec City, QC",
+      winnipeg: "Winnipeg, MB",
+      saskatoon: "Saskatoon, SK",
+      regina: "Regina, SK",
+      halifax: "Halifax, NS",
+    };
+    const hint = provinceCity[key];
+    if (hint) return `${hint}, Canada`;
+  }
+  return `${trimmed}, ${countryLabel}`;
+}
+
+type LatLng = { latitude: number; longitude: number };
+
+async function geocodeCityCenter(address: string, apiKey: string, regionCode?: string): Promise<LatLng | null> {
+  const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+  url.searchParams.set("address", address);
+  url.searchParams.set("key", apiKey);
+  if (regionCode) {
+    url.searchParams.set("components", `country:${regionCode}`);
+  }
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  const data = (await res.json()) as {
+    status?: string;
+    results?: Array<{ geometry?: { location?: { lat: number; lng: number } } }>;
+  };
+  if (data.status !== "OK" || !data.results?.[0]?.geometry?.location) {
+    return null;
+  }
+  const loc = data.results[0].geometry.location;
+  return { latitude: loc.lat, longitude: loc.lng };
+}
+
+/** Drop obvious wrong-country rows when Places still returns cross-border noise. */
+function filterPlacesByTargetCountry(places: NormalizedPlace[], regionCode?: string): NormalizedPlace[] {
+  if (!regionCode) return places;
+  return places.filter((p) => {
+    const a = p.address;
+    if (!a) return true;
+    const lower = a.toLowerCase();
+    if (regionCode === "CA") {
+      if (/\bunited states\b/i.test(a) || /\busa\b/i.test(lower)) return false;
+      if (/, USA\s*$/i.test(a.trim())) return false;
+      if (/\bcanada\b/i.test(lower)) return true;
+      if (/\b(AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)\s+[A-Z]\d[A-Z]\s*\d[A-Z]\d\b/i.test(a)) return true;
+      return true;
+    }
+    if (regionCode === "US") {
+      if (/\bcanada\b/i.test(lower)) return false;
+    }
+    return true;
+  });
+}
+
 /** One text search = one ranked slice; blending multiple cuisines in one query biases the first keywords (often pizza). */
-function textQueryForLikedCategory(categoryId: string, label: string, city: string, country: string): string {
-  const where = `${city}, ${country}`;
+function textQueryForLikedCategory(categoryId: string, label: string, where: string): string {
   switch (categoryId) {
     case "pizza":
-      return `Pizza restaurants and pizzerias in ${where}`;
+      return `Pizza restaurants and pizzerias near ${where}`;
     case "burgers":
-      return `Fast food burger chains quick service restaurants and drive-throughs in ${where}`;
+      return `Fast food burger chains quick service restaurants and drive-throughs near ${where}`;
     case "italian":
-      return `Italian pasta restaurants in ${where}`;
+      return `Italian pasta restaurants near ${where}`;
     case "sushi":
-      return `Sushi restaurants and Japanese dining in ${where}`;
+      return `Sushi restaurants and Japanese dining near ${where}`;
     case "mexican":
-      return `Mexican tacos and burrito restaurants in ${where}`;
+      return `Mexican tacos and burrito restaurants near ${where}`;
     case "healthy":
-      return `Healthy salad bowls vegan vegetarian restaurants in ${where}`;
+      return `Healthy salad bowls vegan vegetarian restaurants near ${where}`;
     case "seafood":
-      return `Seafood fish oyster lobster restaurants in ${where}`;
+      return `Seafood fish oyster lobster restaurants near ${where}`;
     case "indian":
-      return `Indian curry tandoori restaurants in ${where}`;
+      return `Indian curry tandoori restaurants near ${where}`;
     case "thai":
-      return `Thai restaurants pad thai curry in ${where}`;
+      return `Thai restaurants pad thai curry near ${where}`;
     case "korean":
-      return `Korean BBQ bibimbap restaurants in ${where}`;
+      return `Korean BBQ bibimbap restaurants near ${where}`;
     case "cafe":
-      return `Coffee shops cafes bakeries brunch in ${where}`;
+      return `Coffee shops cafes bakeries brunch near ${where}`;
     case "bbq":
-      return `BBQ barbecue smokehouse grill restaurants in ${where}`;
+      return `BBQ barbecue smokehouse grill restaurants near ${where}`;
     default:
-      return `Popular ${label} restaurants in ${where}`;
+      return `Popular ${label} restaurants near ${where}`;
   }
 }
 
@@ -226,7 +329,25 @@ function mergeRoundRobin(buckets: NormalizedPlace[][], maxTotal: number): Normal
   return out;
 }
 
-async function searchTextPlaces(textQuery: string, maxResultCount: number): Promise<NormalizedPlace[]> {
+type SearchTextOptions = {
+  regionCode?: string;
+  locationRestriction?: {
+    circle: { center: LatLng; radius: number };
+  };
+};
+
+async function searchTextPlaces(
+  textQuery: string,
+  maxResultCount: number,
+  options?: SearchTextOptions,
+): Promise<NormalizedPlace[]> {
+  const body: Record<string, unknown> = { textQuery, maxResultCount };
+  if (options?.regionCode) {
+    body.regionCode = options.regionCode;
+  }
+  if (options?.locationRestriction) {
+    body.locationRestriction = options.locationRestriction;
+  }
   const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
     headers: {
@@ -234,10 +355,7 @@ async function searchTextPlaces(textQuery: string, maxResultCount: number): Prom
       "X-Goog-Api-Key": googleMapsApiKey!,
       "X-Goog-FieldMask": fieldMask,
     },
-    body: JSON.stringify({
-      textQuery,
-      maxResultCount,
-    }),
+    body: JSON.stringify(body),
     cache: "no-store",
   });
 
@@ -257,6 +375,8 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const city = searchParams.get("city");
   const country = searchParams.get("country");
+  const countryLabel = country ? countryLabelForTextQuery(country) : "";
+  const regionCode = country?.trim().match(/^[A-Za-z]{2}$/) ? country.trim().toUpperCase() : undefined;
   const likedParam = searchParams.get("likedCategories");
   const likedIds =
     likedParam
@@ -280,26 +400,39 @@ export async function GET(request: Request) {
   const mergedMax = 30;
 
   try {
+    const where = searchPlacePhrase(city, countryLabel, regionCode);
+    const geoCenter = await geocodeCityCenter(where, googleMapsApiKey, regionCode);
+    const searchOpts: SearchTextOptions = {
+      regionCode,
+      ...(geoCenter
+        ? {
+            locationRestriction: {
+              circle: { center: geoCenter, radius: 52000 },
+            },
+          }
+        : {}),
+    };
+
     let places: NormalizedPlace[];
 
     if (likedIds.length === 0) {
-      const textQuery = `Restaurants and food in ${city}, ${country}`;
-      places = await searchTextPlaces(textQuery, singleQueryLimit);
+      const textQuery = `Restaurants and food near ${where}`;
+      places = await searchTextPlaces(textQuery, singleQueryLimit, searchOpts);
     } else if (likedIds.length === 1) {
       const id = likedIds[0]!;
       const cat = categories.find((c) => c.id === id);
       const label = cat?.title ?? id;
-      const textQuery = textQueryForLikedCategory(id, label, city, country);
-      places = await searchTextPlaces(textQuery, singleQueryLimit);
+      const textQuery = textQueryForLikedCategory(id, label, where);
+      places = await searchTextPlaces(textQuery, singleQueryLimit, searchOpts);
     } else {
       const queries = likedIds.map((id) => {
         const cat = categories.find((c) => c.id === id);
         const label = cat?.title ?? id;
-        return textQueryForLikedCategory(id, label, city, country);
+        return textQueryForLikedCategory(id, label, where);
       });
 
       const settled = await Promise.allSettled(
-        queries.map((textQuery) => searchTextPlaces(textQuery, perCategoryLimit)),
+        queries.map((textQuery) => searchTextPlaces(textQuery, perCategoryLimit, searchOpts)),
       );
 
       const buckets: NormalizedPlace[][] = [];
@@ -310,12 +443,16 @@ export async function GET(request: Request) {
       }
 
       if (buckets.length === 0) {
-        const fallback = `Restaurants and food in ${city}, ${country}`;
-        places = await searchTextPlaces(fallback, singleQueryLimit);
+        const fallback = `Restaurants and food near ${where}`;
+        places = await searchTextPlaces(fallback, singleQueryLimit, searchOpts);
       } else {
         places = mergeRoundRobin(buckets, mergedMax);
         if (places.length < 8) {
-          const filler = await searchTextPlaces(`Popular restaurants in ${city}, ${country}`, singleQueryLimit);
+          const filler = await searchTextPlaces(
+            `Popular restaurants near ${where}`,
+            singleQueryLimit,
+            searchOpts,
+          );
           const seen = new Set(places.map((p) => p.id));
           for (const p of filler) {
             if (places.length >= mergedMax) break;
@@ -326,6 +463,8 @@ export async function GET(request: Request) {
         }
       }
     }
+
+    places = filterPlacesByTargetCountry(places, regionCode);
 
     return NextResponse.json({ places });
   } catch (error) {
