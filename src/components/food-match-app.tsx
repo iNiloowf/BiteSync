@@ -1975,7 +1975,12 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
         role="dialog"
         aria-modal="true"
         aria-label="Photos"
+        onPointerDown={(event) => event.stopPropagation()}
+        onPointerMove={(event) => event.stopPropagation()}
+        onPointerUp={(event) => event.stopPropagation()}
+        onPointerCancel={(event) => event.stopPropagation()}
         onClick={(event) => {
+          event.stopPropagation();
           if (event.target === event.currentTarget) {
             setLightboxIndex(null);
           }
@@ -1998,10 +2003,12 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
           className="relative flex min-h-0 flex-1 items-center justify-center pt-10"
           style={photos.length > 1 ? { touchAction: "none" } : undefined}
           onPointerDown={(event) => {
+            event.stopPropagation();
             if (photos.length < 2) return;
             lightboxSwipeX0.current = event.clientX;
           }}
           onPointerUp={(event) => {
+            event.stopPropagation();
             const x0 = lightboxSwipeX0.current;
             lightboxSwipeX0.current = null;
             if (x0 == null || photos.length < 2) return;
@@ -2013,7 +2020,8 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
               setLightboxIndex((i) => (i !== null && i < photos.length - 1 ? i + 1 : i));
             }
           }}
-          onPointerCancel={() => {
+          onPointerCancel={(event) => {
+            event.stopPropagation();
             lightboxSwipeX0.current = null;
           }}
         >
