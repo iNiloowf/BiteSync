@@ -26,6 +26,22 @@ type RoomRecord = {
   city: string;
 };
 
+type RoomMember = {
+  id: string;
+  name: string;
+  joined_at: string;
+};
+
+type CityRestaurant = {
+  id: string;
+  name: string;
+  address: string;
+  rating: number | null;
+  userRatingCount: number | null;
+  priceLevel: string | null;
+  primaryType: string | null;
+};
+
 type UntypedQueryResult<T> = Promise<{ data: T; error?: { message?: string } | null }>;
 
 type ProfilesTable = {
@@ -80,6 +96,9 @@ export function FoodMatchApp() {
   const [city, setCity] = useState("Denver");
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
+  const [cityRestaurants, setCityRestaurants] = useState<CityRestaurant[]>([]);
+  const [restaurantsLoading, setRestaurantsLoading] = useState(false);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -97,6 +116,9 @@ export function FoodMatchApp() {
     () => supabase?.from("room_members") as unknown as MembersTable,
     [supabase],
   );
+
+  const visibleRoomMembers = activeRoom ? roomMembers : [];
+  const visibleCityRestaurants = activeRoom ? cityRestaurants : [];
 
   const loadProfile = useCallback(
     async (user: User) => {
@@ -117,8 +139,8 @@ export function FoodMatchApp() {
       const fallbackProfile: Profile = {
         id: user.id,
         full_name: user.user_metadata.full_name ?? user.email?.split("@")[0] ?? "BiteSync User",
-        country_code: "US",
-        city: "Denver",
+        country_code: user.user_metadata.country_code ?? "US",
+        city: user.user_metadata.city ?? "Denver",
         avatar_url: null,
       };
 
@@ -193,6 +215,8 @@ export function FoodMatchApp() {
           options: {
             data: {
               full_name: fullName,
+              country_code: countryCode,
+              city,
             },
           },
         });
@@ -359,6 +383,104 @@ export function FoodMatchApp() {
     }
   }
 
+  useEffect(() => {
+    if (!supabase || !activeRoom) {
+      return;
+    }
+
+    const client = supabase;
+    const roomId = activeRoom.id;
+    let active = true;
+
+    async function loadMembers() {
+      const { data } = await client
+        .from("room_members")
+        .select("id,name,joined_at")
+        .eq("room_id", roomId)
+        .order("joined_at", { ascending: true });
+
+      if (active) {
+        setRoomMembers(((data as RoomMember[] | null) ?? []).filter(Boolean));
+      }
+    }
+
+    void loadMembers();
+
+    const channel = supabase
+      .channel(`room-members-${activeRoom.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_members",
+          filter: `room_id=eq.${roomId}`,
+        },
+        () => {
+          void loadMembers();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [activeRoom, supabase]);
+
+  useEffect(() => {
+    if (!activeRoom) {
+      return;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+    const roomCity = activeRoom.city;
+    const roomCountry = activeRoom.country_code;
+
+    async function loadRestaurants() {
+      setRestaurantsLoading(true);
+      try {
+        const response = await fetch(
+          `/api/restaurants?city=${encodeURIComponent(roomCity)}&country=${encodeURIComponent(
+            roomCountry,
+          )}`,
+          { signal: controller.signal },
+        );
+
+        const payload = (await response.json()) as {
+          places?: CityRestaurant[];
+          error?: string;
+        };
+
+        if (!active) return;
+
+        if (!response.ok) {
+          setMessage(payload.error ?? "Could not load restaurants for this city.");
+          setCityRestaurants([]);
+          return;
+        }
+
+        setCityRestaurants(payload.places ?? []);
+      } catch (error) {
+        if (!active || controller.signal.aborted) return;
+        setMessage(error instanceof Error ? error.message : "Could not load restaurants.");
+        setCityRestaurants([]);
+      } finally {
+        if (active) {
+          setRestaurantsLoading(false);
+        }
+      }
+    }
+
+    void loadRestaurants();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [activeRoom]);
+
   if (loading) {
     return (
       <main className="grid h-[100dvh] place-items-center overflow-hidden bg-[#0f0c12] text-white">
@@ -466,6 +588,9 @@ export function FoodMatchApp() {
                 profile={profile}
                 room={activeRoom}
                 mode={roomMode}
+                roomMembers={visibleRoomMembers}
+                cityRestaurants={visibleCityRestaurants}
+                restaurantsLoading={restaurantsLoading}
                 onBack={() => setScreen("home")}
               />
             ) : null}
@@ -572,36 +697,38 @@ function AuthScreen({
   onCityChange: (value: string) => void;
   onSubmit: () => void;
 }) {
+  const isSignIn = mode === "signin";
+
   return (
-    <div className="flex h-full min-h-0 flex-col justify-between gap-5 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
       <div>
         <div className="inline-flex rounded-full border border-white/10 bg-white/6 p-1">
           <button
             onClick={() => onModeChange("signup")}
-            className={`rounded-full px-4 py-2 text-sm font-semibold ${mode === "signup" ? "bg-white text-stone-950" : "text-white/65"}`}
+            className={`rounded-full px-3 py-1.5 text-sm font-semibold ${mode === "signup" ? "bg-white text-stone-950" : "text-white/65"}`}
           >
             Sign up
           </button>
           <button
             onClick={() => onModeChange("signin")}
-            className={`rounded-full px-4 py-2 text-sm font-semibold ${mode === "signin" ? "bg-white text-stone-950" : "text-white/65"}`}
+            className={`rounded-full px-3 py-1.5 text-sm font-semibold ${mode === "signin" ? "bg-white text-stone-950" : "text-white/65"}`}
           >
             Sign in
           </button>
         </div>
 
-        <h1 className="mt-5 text-4xl font-semibold leading-tight text-white">
+        <h1 className="mt-3 text-[1.75rem] font-semibold leading-tight text-white sm:text-3xl">
           {mode === "signup" ? "Create your BiteSync account." : "Welcome back."}
         </h1>
-        <p className="mt-3 text-sm leading-7 text-white/58">
+        <p className={`mt-2 text-sm text-white/58 ${isSignIn ? "leading-5" : "leading-6"}`}>
           {mode === "signup"
             ? "Sign up once, then every time you open the app you can go straight to Host or Join."
             : "Sign in to jump back into your rooms and keep your profile."}
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="space-y-4 pb-2">
+      <div className={`min-h-0 ${isSignIn ? "" : "flex-1 overflow-y-auto"}`}>
+        <div className={`pb-2 ${isSignIn ? "space-y-2.5" : "space-y-3"}`}>
           {mode === "signup" ? (
             <>
               <Field label="Full name">
@@ -633,7 +760,7 @@ function AuthScreen({
         </div>
       </div>
 
-      <button onClick={onSubmit} disabled={submitting} className={primaryButtonClass}>
+      <button onClick={onSubmit} disabled={submitting} className={`mt-auto ${primaryButtonCompactClass}`}>
         {submitting ? "Please wait..." : mode === "signup" ? "Create account" : "Sign in"}
       </button>
     </div>
@@ -800,11 +927,17 @@ function RoomScreen({
   profile,
   room,
   mode,
+  roomMembers,
+  cityRestaurants,
+  restaurantsLoading,
   onBack,
 }: {
   profile: Profile | null;
   room: RoomRecord | null;
   mode: RoomMode;
+  roomMembers: RoomMember[];
+  cityRestaurants: CityRestaurant[];
+  restaurantsLoading: boolean;
   onBack: () => void;
 }) {
   return (
@@ -834,11 +967,60 @@ function RoomScreen({
           <p className="mt-2 text-2xl font-semibold text-white">{profile?.full_name}</p>
         </div>
 
-        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-          <p className="text-sm text-white/55">Next step</p>
-          <p className="mt-2 text-base leading-7 text-white/78">
-            This room is now stored in Supabase. The next integration step is live multi-user swipes and synced restaurant voting inside the room.
-          </p>
+        <div className="min-h-0 grid flex-1 gap-3 overflow-y-auto">
+          <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+            <p className="text-sm text-white/55">People in this room</p>
+            <div className="mt-3 space-y-2">
+              {roomMembers.length > 0 ? (
+                roomMembers.map((member) => (
+                  <div key={member.id} className="flex items-center justify-between rounded-2xl bg-white/6 px-4 py-3">
+                    <span className="font-medium text-white">{member.name}</span>
+                    <span className="text-xs text-white/45">joined</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-white/55">No one has joined yet.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-white/55">Restaurants in {room?.city}</p>
+              <span className="text-xs text-white/45">
+                {restaurantsLoading ? "loading..." : `${cityRestaurants.length} places`}
+              </span>
+            </div>
+            <div className="mt-3 space-y-2">
+              {cityRestaurants.length > 0 ? (
+                cityRestaurants.map((restaurant) => (
+                  <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-white">{restaurant.name}</p>
+                        <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                        <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 text-xs text-white/45">
+                      <span>{restaurant.priceLevel ?? "Price unknown"}</span>
+                      <span>•</span>
+                      <span>{restaurant.primaryType ?? "Restaurant"}</span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-white/55">
+                  {restaurantsLoading
+                    ? "Looking up real restaurants for this city..."
+                    : "No restaurant data yet. Add the Google Places API key and redeploy."}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -870,13 +1052,16 @@ function createRoomCode(city: string) {
 }
 
 const fieldClass =
-  "w-full rounded-[22px] border border-white/10 bg-white/6 px-4 py-3 text-white outline-none transition focus:border-white/28";
+  "w-full rounded-[22px] border border-white/10 bg-white/6 px-4 py-2.5 text-sm text-white outline-none transition focus:border-white/28";
 
 const ghostButtonClass =
   "rounded-full border border-white/10 bg-white/6 px-4 py-2 text-sm font-semibold text-white/80";
 
 const primaryButtonClass =
   "w-full rounded-full bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] px-5 py-4 font-semibold text-white shadow-[0_18px_55px_rgba(255,92,124,0.24)]";
+
+const primaryButtonCompactClass =
+  "w-full rounded-full bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] px-5 py-3.5 text-sm font-semibold text-white shadow-[0_18px_55px_rgba(255,92,124,0.24)]";
 
 const primaryCardClass =
   "w-full rounded-[28px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_52%,#8f6bff_100%)] px-5 py-5 text-left shadow-[0_20px_70px_rgba(255,101,101,0.28)]";
