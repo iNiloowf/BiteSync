@@ -6,6 +6,7 @@ create table if not exists public.profiles (
   country_code text not null default 'US',
   city text not null default 'Denver',
   avatar_url text,
+  hidden_restaurants jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now()
 );
 

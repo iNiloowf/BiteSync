@@ -7,7 +7,7 @@ import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 import { categories, countries, type Category } from "@/data/mock-data";
 import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
 
-type Screen = "auth" | "home" | "profile" | "room";
+type Screen = "auth" | "home" | "profile" | "room" | "hidden_places";
 type AuthMode = "signin" | "signup";
 type RoomMode = "host" | "join";
 type RoomStage =
@@ -18,13 +18,42 @@ type RoomStage =
   | "restaurants"
   | "final";
 
+type HiddenPlace = { id: string; name: string };
+
 type Profile = {
   id: string;
   full_name: string;
   country_code: string;
   city: string;
   avatar_url: string | null;
+  hidden_restaurants?: HiddenPlace[] | null;
 };
+
+function parseHiddenRestaurants(raw: unknown): HiddenPlace[] {
+  if (!Array.isArray(raw)) return [];
+  const out: HiddenPlace[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const o = row as { id?: unknown; name?: unknown };
+    if (typeof o.id !== "string" || !o.id) continue;
+    out.push({
+      id: o.id,
+      name: typeof o.name === "string" && o.name.trim() ? o.name.trim() : o.id,
+    });
+  }
+  return out;
+}
+
+function profileFromDbRow(row: Record<string, unknown>): Profile {
+  return {
+    id: String(row.id),
+    full_name: String(row.full_name ?? ""),
+    country_code: String(row.country_code ?? "US"),
+    city: String(row.city ?? ""),
+    avatar_url: row.avatar_url == null || row.avatar_url === "" ? null : String(row.avatar_url),
+    hidden_restaurants: parseHiddenRestaurants(row.hidden_restaurants),
+  };
+}
 
 type RoomRecord = {
   id: string;
@@ -209,6 +238,8 @@ export function FoodMatchApp() {
 
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
   const [screen, setScreen] = useState<Screen>(hasSupabaseEnv ? "auth" : "home");
   const [authMode, setAuthMode] = useState<AuthMode>("signup");
   const [loading, setLoading] = useState(hasSupabaseEnv);
@@ -487,6 +518,11 @@ export function FoodMatchApp() {
     return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}-${placesFetchNonce}`;
   }, [activeRoom, roomStage, restaurantFocusCategoryIds, soloLikedCategoryIds, memberCount, placesFetchNonce]);
 
+  const hiddenRestaurantIdSet = useMemo(
+    () => new Set((profile?.hidden_restaurants ?? []).map((h) => h.id)),
+    [profile?.hidden_restaurants],
+  );
+
   const restaurantCandidates = useMemo(() => {
     const sortByRating = (left: CityRestaurant, right: CityRestaurant) => {
       const leftPriority = left.rating !== null && left.rating >= 4 ? 1 : 0;
@@ -500,6 +536,7 @@ export function FoodMatchApp() {
     };
 
     const focusIds = restaurantFocusCategoryIds;
+    const notHidden = (r: CityRestaurant) => !hiddenRestaurantIdSet.has(r.id);
 
     const primary = visibleCityRestaurants
       .filter((restaurant) =>
@@ -508,14 +545,21 @@ export function FoodMatchApp() {
             restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
           : restaurant.categoryIds.some((categoryId) => focusIds.includes(categoryId)),
       )
+      .filter(notHidden)
       .sort(sortByRating);
 
     if (primary.length > 0) return primary;
     if (visibleCityRestaurants.length > 0) {
-      return [...visibleCityRestaurants].sort(sortByRating);
+      return [...visibleCityRestaurants].filter(notHidden).sort(sortByRating);
     }
     return primary;
-  }, [memberCount, restaurantFocusCategoryIds, soloLikedCategoryIds, visibleCityRestaurants]);
+  }, [
+    memberCount,
+    restaurantFocusCategoryIds,
+    soloLikedCategoryIds,
+    visibleCityRestaurants,
+    hiddenRestaurantIdSet,
+  ]);
 
   const myRestaurantVotes = useMemo(
     () =>
@@ -565,10 +609,11 @@ export function FoodMatchApp() {
       const { data } = await profilesQuery.select("*").eq("id", user.id).maybeSingle();
 
       if (data) {
-        setProfile(data);
-        setFullName(data.full_name);
-        setCountryCode(data.country_code || "US");
-        setCity(data.city || "Denver");
+        const normalized = profileFromDbRow(data as unknown as Record<string, unknown>);
+        setProfile(normalized);
+        setFullName(normalized.full_name);
+        setCountryCode(normalized.country_code || "US");
+        setCity(normalized.city || "Denver");
         return;
       }
 
@@ -578,14 +623,18 @@ export function FoodMatchApp() {
         country_code: user.user_metadata.country_code ?? "US",
         city: user.user_metadata.city ?? "Denver",
         avatar_url: null,
+        hidden_restaurants: [],
       };
 
       const { data: inserted } = await profilesQuery.upsert(fallbackProfile).select().single();
 
-      setProfile(inserted ?? fallbackProfile);
-      setFullName((inserted ?? fallbackProfile).full_name);
-      setCountryCode((inserted ?? fallbackProfile).country_code);
-      setCity((inserted ?? fallbackProfile).city);
+      const insertedProfile = inserted
+        ? profileFromDbRow(inserted as unknown as Record<string, unknown>)
+        : fallbackProfile;
+      setProfile(insertedProfile);
+      setFullName(insertedProfile.full_name);
+      setCountryCode(insertedProfile.country_code);
+      setCity(insertedProfile.city);
     },
     [getProfilesTable, supabase],
   );
@@ -676,6 +725,7 @@ export function FoodMatchApp() {
             country_code: countryCode,
             city,
             avatar_url: null,
+            hidden_restaurants: [],
           });
           setMessage("Your account was created. You can start using BiteSync now.");
         }
@@ -725,12 +775,13 @@ export function FoodMatchApp() {
         country_code: countryCode,
         city,
         avatar_url: profile?.avatar_url ?? null,
+        hidden_restaurants: profile?.hidden_restaurants ?? [],
       };
 
       const { data, error } = await getProfilesTable().upsert(payload).select().single();
       if (error) throw error;
 
-      setProfile(data as Profile);
+      setProfile(profileFromDbRow(data as unknown as Record<string, unknown>));
       if (normalizedEmail && normalizedEmail !== session.user.email) {
         setMessage("Email update requested. Check your inbox to confirm the new address.");
       }
@@ -766,12 +817,13 @@ export function FoodMatchApp() {
           country_code: countryCode,
           city,
           avatar_url: data.publicUrl,
+          hidden_restaurants: profile?.hidden_restaurants ?? [],
         })
         .select()
         .single();
 
       if (profileError) throw profileError;
-      setProfile(updated as Profile);
+      setProfile(profileFromDbRow(updated as unknown as Record<string, unknown>));
     } catch (error) {
       setMessage(getErrorMessage(error, "Avatar upload failed."));
     } finally {
@@ -1047,6 +1099,77 @@ export function FoodMatchApp() {
       throw error;
     }
   }
+
+  const persistProfileHidden = useCallback(
+    async (nextHidden: HiddenPlace[]) => {
+      if (!supabase || !session?.user) return;
+      const p = profileRef.current;
+      if (!p) return;
+      const { data, error } = await getProfilesTable()
+        .upsert({
+          id: session.user.id,
+          full_name: p.full_name,
+          country_code: p.country_code,
+          city: p.city,
+          avatar_url: p.avatar_url,
+          hidden_restaurants: nextHidden,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      setProfile(profileFromDbRow(data as unknown as Record<string, unknown>));
+    },
+    [getProfilesTable, supabase, session?.user],
+  );
+
+  const hideRestaurantForever = useCallback(
+    async (restaurant: CityRestaurant) => {
+      const p = profileRef.current;
+      if (!p) return;
+      const prev = p.hidden_restaurants ?? [];
+      if (prev.some((h) => h.id === restaurant.id)) return;
+      try {
+        await persistProfileHidden([...prev, { id: restaurant.id, name: restaurant.name }]);
+        setRestaurantVotes((votes) => votes.filter((v) => v.restaurant_id !== restaurant.id));
+        setSwipePickLabel(`Hidden forever · ${restaurant.name}`);
+      } catch (error) {
+        setMessage(
+          getErrorMessage(error, "Could not save. Add the hidden_restaurants column (see Supabase migration)."),
+        );
+      }
+    },
+    [persistProfileHidden],
+  );
+
+  const restoreHiddenRestaurantIds = useCallback(
+    async (ids: readonly string[]) => {
+      const p = profileRef.current;
+      if (!p || ids.length === 0) return;
+      const drop = new Set(ids);
+      const next = (p.hidden_restaurants ?? []).filter((h) => !drop.has(h.id));
+      try {
+        await persistProfileHidden(next);
+        setMessage("");
+      } catch (error) {
+        setMessage(
+          getErrorMessage(error, "Could not restore. Add the hidden_restaurants column (see Supabase migration)."),
+        );
+      }
+    },
+    [persistProfileHidden],
+  );
+
+  const handleRestoreHiddenPlaces = useCallback(
+    async (ids: readonly string[]) => {
+      setSubmitting(true);
+      try {
+        await restoreHiddenRestaurantIds(ids);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [restoreHiddenRestaurantIds],
+  );
 
   useEffect(() => {
     if (!supabase || !activeRoom) {
@@ -1534,9 +1657,20 @@ export function FoodMatchApp() {
                 profile={profile}
                 roomCodeInput={roomCodeInput}
                 submitting={submitting}
+                hiddenPlaceCount={(profile?.hidden_restaurants ?? []).length}
                 onRoomCodeChange={setRoomCodeInput}
                 onHost={handleHostRoom}
                 onJoin={handleJoinRoom}
+                onOpenHiddenPlaces={() => setScreen("hidden_places")}
+              />
+            ) : null}
+
+            {screen === "hidden_places" ? (
+              <HiddenPlacesScreen
+                items={profile?.hidden_restaurants ?? []}
+                submitting={submitting}
+                onBack={() => setScreen("home")}
+                onRestore={handleRestoreHiddenPlaces}
               />
             ) : null}
 
@@ -1583,6 +1717,7 @@ export function FoodMatchApp() {
                 onStartRestaurantRound={() => setRoomStage("restaurants")}
                 onCategoryBatchSubmit={handleCategoryBatchSubmit}
                 onRestaurantDecision={handleRestaurantDecision}
+                onHideRestaurantForever={hasSupabaseEnv ? hideRestaurantForever : undefined}
                 onRetryPlaces={() => setPlacesFetchNonce((n) => n + 1)}
                 onBack={() => {
                   setSwipePickLabel("");
@@ -1622,7 +1757,9 @@ function AppHeader({
         ? "Your profile"
         : screen === "room"
           ? "Room ready"
-          : "Choose a path";
+          : screen === "hidden_places"
+            ? "Hidden places"
+            : "Choose a path";
 
   return (
     <div className="flex items-center justify-between border-b border-white/8 px-4 py-4">
@@ -1769,20 +1906,113 @@ function AuthScreen({
   );
 }
 
+function HiddenPlacesScreen({
+  items,
+  submitting,
+  onBack,
+  onRestore,
+}: {
+  items: HiddenPlace[];
+  submitting: boolean;
+  onBack: () => void;
+  onRestore: (ids: readonly string[]) => void | Promise<void>;
+}) {
+  const [checkedRestore, setCheckedRestore] = useState<Set<string>>(() => new Set(items.map((i) => i.id)));
+
+  useEffect(() => {
+    setCheckedRestore(new Set(items.map((i) => i.id)));
+  }, [items]);
+
+  const toggle = (id: string) => {
+    setCheckedRestore((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      <button type="button" onClick={onBack} className={ghostButtonClass}>
+        Back
+      </button>
+      <div className="min-w-0">
+        <h1 className="text-2xl font-semibold text-white">Hidden from suggestions</h1>
+        <p className="mt-2 text-sm leading-relaxed text-white/60">
+          Checked places return to your restaurant deck. Uncheck any you want to stay hidden. Use Select all, then
+          uncheck a few to restore only some.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setCheckedRestore(new Set(items.map((i) => i.id)))}
+          className="rounded-full border border-white/14 bg-white/8 px-4 py-2 text-sm font-semibold text-white/88 transition hover:bg-white/12"
+        >
+          Select all
+        </button>
+        <button
+          type="button"
+          onClick={() => setCheckedRestore(new Set())}
+          className="rounded-full border border-white/14 bg-white/8 px-4 py-2 text-sm font-semibold text-white/88 transition hover:bg-white/12"
+        >
+          Clear checks
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-0.5">
+        {items.length === 0 ? (
+          <p className="rounded-2xl border border-white/10 bg-white/6 px-4 py-4 text-sm text-white/55">
+            Nothing hidden yet. While swiping restaurants, use &quot;Delete forever&quot; to remove a place from
+            suggestions.
+          </p>
+        ) : (
+          items.map((item) => (
+            <label
+              key={item.id}
+              className="flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-white/6 px-4 py-3.5 transition hover:bg-white/9"
+            >
+              <input
+                type="checkbox"
+                checked={checkedRestore.has(item.id)}
+                onChange={() => toggle(item.id)}
+                className="h-5 w-5 shrink-0 rounded border-white/30 text-orange-400 focus:ring-orange-400/40"
+              />
+              <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-white">{item.name}</span>
+            </label>
+          ))
+        )}
+      </div>
+      <button
+        type="button"
+        disabled={submitting || checkedRestore.size === 0}
+        onClick={() => void Promise.resolve(onRestore([...checkedRestore]))}
+        className={primaryButtonClass}
+      >
+        {submitting ? "Saving…" : "Restore checked to suggestions"}
+      </button>
+    </div>
+  );
+}
+
 function HomeScreen({
   profile,
   roomCodeInput,
   submitting,
+  hiddenPlaceCount,
   onRoomCodeChange,
   onHost,
   onJoin,
+  onOpenHiddenPlaces,
 }: {
   profile: Profile | null;
   roomCodeInput: string;
   submitting: boolean;
+  hiddenPlaceCount: number;
   onRoomCodeChange: (value: string) => void;
   onHost: () => void;
   onJoin: () => void;
+  onOpenHiddenPlaces: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
@@ -1793,6 +2023,34 @@ function HomeScreen({
           <p className="mt-2 text-sm text-white/58">
             {profile?.city}, {profile?.country_code}
           </p>
+
+          <div className="mt-5 flex items-center gap-4 border-t border-white/10 pt-5">
+            <button
+              type="button"
+              onClick={onOpenHiddenPlaces}
+              className="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/15 bg-white/8 ring-2 ring-white/10 transition hover:bg-white/12 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70"
+              aria-label="Manage hidden restaurants"
+            >
+              {profile?.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-lg font-semibold text-white">
+                  {getInitials(profile?.full_name ?? "?")}
+                </div>
+              )}
+            </button>
+            <div className="min-w-0 flex-1 text-left">
+              <p className="text-xs uppercase tracking-[0.18em] text-white/42">Your photo</p>
+              <button
+                type="button"
+                onClick={onOpenHiddenPlaces}
+                className="mt-1 block w-full text-left text-sm font-semibold leading-snug text-orange-200/95 underline decoration-orange-300/40 underline-offset-2 transition hover:text-orange-100"
+              >
+                Hidden from suggestions ({hiddenPlaceCount}) — tap photo or here to restore
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1948,9 +2206,11 @@ function placePhotoWithSize(src: string, w: number, h: number) {
 const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   restaurant,
   heroImagePriority = "low",
+  onHideForever,
 }: {
   restaurant: CityRestaurant;
   heroImagePriority?: "high" | "low";
+  onHideForever?: (place: CityRestaurant) => void | Promise<void>;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const photos = restaurant.photoUrls ?? [];
@@ -1993,18 +2253,18 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
     const prev = lbPrevIdxRef.current;
     lbPrevIdxRef.current = lightboxIndex;
     if (prev === null) {
-      setLbAnim({ opacity: 1, tx: 0, transition: "opacity 200ms ease-out" });
+      setLbAnim({ opacity: 1, tx: 0, transition: "opacity 180ms ease-out" });
       return;
     }
     if (prev === lightboxIndex) return;
-    const fromX = lightboxIndex > prev ? 48 : -48;
-    setLbAnim({ opacity: 0.35, tx: fromX, transition: "none" });
+    const fromX = lightboxIndex > prev ? 36 : -36;
+    setLbAnim({ opacity: 1, tx: fromX, transition: "none" });
     const id = window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         setLbAnim({
           opacity: 1,
           tx: 0,
-          transition: "opacity 260ms ease-out, transform 320ms cubic-bezier(0.22, 1, 0.36, 1)",
+          transition: "transform 300ms cubic-bezier(0.22, 1, 0.36, 1)",
         });
       });
     });
@@ -2061,8 +2321,21 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             {lightboxIndex + 1} / {photos.length}
           </p>
         ) : null}
+        {onHideForever ? (
+          <button
+            type="button"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void Promise.resolve(onHideForever(restaurant)).then(() => setLightboxIndex(null));
+            }}
+            className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-20 max-w-[min(92vw,360px)] -translate-x-1/2 rounded-full border border-rose-400/35 bg-rose-500/20 px-4 py-2.5 text-xs font-semibold text-rose-100 shadow-lg backdrop-blur-sm transition hover:bg-rose-500/30"
+          >
+            Delete forever — never suggest again
+          </button>
+        ) : null}
         <div
-          className="relative flex min-h-0 flex-1 items-center justify-center pt-10"
+          className={`relative flex min-h-0 flex-1 items-center justify-center pt-10 ${onHideForever ? "pb-24" : ""}`}
           style={photos.length > 1 ? { touchAction: "none" } : undefined}
           onPointerDown={(event) => {
             event.stopPropagation();
@@ -2120,11 +2393,12 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             </>
           ) : null}
           <div
-            className="flex max-h-[min(88dvh,920px)] max-w-[min(96vw,920px)] items-center justify-center"
+            className="flex max-h-[min(88dvh,920px)] max-w-[min(96vw,920px)] items-center justify-center overflow-hidden"
             style={{
               opacity: lbAnim.opacity,
               transform: `translateX(${lbAnim.tx}px)`,
               transition: lbAnim.transition,
+              willChange: "transform",
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -2230,6 +2504,20 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             </span>
           </div>
 
+          {onHideForever ? (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onHideForever(restaurant);
+              }}
+              className="w-full rounded-xl border border-rose-400/25 bg-rose-500/10 py-2.5 text-center text-xs font-semibold text-rose-100/95 transition hover:bg-rose-500/18"
+            >
+              Delete forever — never suggest this place again
+            </button>
+          ) : null}
+
           {extraPhotos.length > 0 ? (
             <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {extraPhotos.map((src, thumbIndex) => (
@@ -2263,7 +2551,8 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 (prev, next) =>
   prev.restaurant.id === next.restaurant.id &&
   prev.heroImagePriority === next.heroImagePriority &&
-  prev.restaurant.categoryIds.join(",") === next.restaurant.categoryIds.join(","));
+  prev.restaurant.categoryIds.join(",") === next.restaurant.categoryIds.join(",") &&
+  prev.onHideForever === next.onHideForever);
 
 function roomStageFlowLabel(stage: RoomStage) {
   switch (stage) {
@@ -2297,6 +2586,7 @@ function RoomScreen({
   onStartRestaurantRound,
   onCategoryBatchSubmit,
   onRestaurantDecision,
+  onHideRestaurantForever,
   onRetryPlaces,
   onBack,
 }: {
@@ -2320,6 +2610,7 @@ function RoomScreen({
   onStartRestaurantRound: () => void;
   onCategoryBatchSubmit: (likeIds: readonly string[]) => Promise<void>;
   onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void | Promise<void>;
+  onHideRestaurantForever?: (restaurant: CityRestaurant) => void | Promise<void>;
   onRetryPlaces: () => void;
   onBack: () => void;
 }) {
@@ -2548,6 +2839,7 @@ function RoomScreen({
                   <RestaurantSwipeCard
                     restaurant={restaurant}
                     heroImagePriority={restaurant.id === currentRestaurant.id ? "high" : "low"}
+                    onHideForever={onHideRestaurantForever}
                   />
                 )}
               />
