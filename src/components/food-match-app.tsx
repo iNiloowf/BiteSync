@@ -558,6 +558,12 @@ export function FoodMatchApp() {
   }, [loadProfile, supabase]);
 
   useEffect(() => {
+    if (!supabase) return;
+    const token = session?.access_token;
+    void supabase.realtime.setAuth(token ?? null);
+  }, [supabase, session?.access_token]);
+
+  useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
       if (!menuRef.current?.contains(event.target as Node)) {
         setMenuOpen(false);
@@ -970,7 +976,14 @@ export function FoodMatchApp() {
 
     void loadMembers();
 
-    const pollMs = 4000;
+    const staggerDelays = [300, 900, 2200];
+    const staggerIds = staggerDelays.map((delay) =>
+      window.setTimeout(() => {
+        void loadMembers();
+      }, delay),
+    );
+
+    const pollMs = screen === "room" ? 1200 : 3500;
     const pollId = window.setInterval(() => {
       void loadMembers();
     }, pollMs);
@@ -981,7 +994,12 @@ export function FoodMatchApp() {
       }
     };
 
+    const onWindowFocus = () => {
+      void loadMembers();
+    };
+
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onWindowFocus);
 
     const channel = supabase
       .channel(`room-members-${activeRoom.id}`)
@@ -997,15 +1015,21 @@ export function FoodMatchApp() {
           void loadMembers();
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          void loadMembers();
+        }
+      });
 
     return () => {
       active = false;
+      staggerIds.forEach((id) => window.clearTimeout(id));
       window.clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onWindowFocus);
       void supabase.removeChannel(channel);
     };
-  }, [activeRoom, supabase]);
+  }, [activeRoom, supabase, screen]);
 
   useEffect(() => {
     if (!supabase || !activeRoom) {
