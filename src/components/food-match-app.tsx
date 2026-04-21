@@ -89,8 +89,7 @@ type RoomsTable = {
 };
 
 type MembersTable = {
-  insert: (value: unknown) => unknown;
-  upsert: (value: unknown) => unknown;
+  insert: (value: unknown) => Promise<{ error?: { message?: string } | null }>;
 };
 
 type CategoryVotesTable = {
@@ -156,6 +155,23 @@ export function FoodMatchApp() {
     [supabase],
   );
 
+  const syncRoomMembers = useCallback((memberName: string) => {
+    setRoomMembers((current) => {
+      if (current.some((member) => member.name === memberName)) {
+        return current;
+      }
+
+      return [
+        ...current,
+        {
+          id: `local-${memberName}`,
+          name: memberName,
+          joined_at: new Date().toISOString(),
+        },
+      ];
+    });
+  }, []);
+
   const visibleRoomMembers = activeRoom ? roomMembers : [];
   const visibleCityRestaurants = useMemo(
     () => (activeRoom ? cityRestaurants : []),
@@ -192,14 +208,22 @@ export function FoodMatchApp() {
   const restaurantCandidates = useMemo(
     () =>
       visibleCityRestaurants
-        .filter((restaurant) => restaurant.rating === null || restaurant.rating >= 4)
         .filter((restaurant) =>
           sharedCategoryIds.length === 0
             ? memberCount === 1 &&
               restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
             : restaurant.categoryIds.some((categoryId) => sharedCategoryIds.includes(categoryId)),
         )
-        .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0)),
+        .sort((left, right) => {
+          const leftPriority = left.rating !== null && left.rating >= 4 ? 1 : 0;
+          const rightPriority = right.rating !== null && right.rating >= 4 ? 1 : 0;
+
+          if (rightPriority !== leftPriority) {
+            return rightPriority - leftPriority;
+          }
+
+          return (right.rating ?? 0) - (left.rating ?? 0);
+        }),
     [memberCount, sharedCategoryIds, soloLikedCategoryIds, visibleCityRestaurants],
   );
 
@@ -453,7 +477,7 @@ export function FoodMatchApp() {
   }
 
   async function handleHostRoom() {
-    if (!supabase || !profile) return;
+    if (!supabase || !profile || !session?.user) return;
     setSubmitting(true);
     setMessage("");
 
@@ -471,16 +495,20 @@ export function FoodMatchApp() {
 
       if (roomError) throw roomError;
 
-      await getMembersTable().insert({
+      const { error: memberError } = await getMembersTable().insert({
         room_id: roomData.id,
-        user_id: session?.user.id,
+        user_id: session.user.id,
         name: profile.full_name,
       });
+
+      if (memberError) throw memberError;
 
       setRoomStage("lobby");
       setCategoryVotes([]);
       setRestaurantVotes([]);
+      setRoomMembers([]);
       setActiveRoom(roomData as RoomRecord);
+      syncRoomMembers(profile.full_name);
       setRoomMode("host");
       setScreen("room");
     } catch (error) {
@@ -491,7 +519,7 @@ export function FoodMatchApp() {
   }
 
   async function handleJoinRoom() {
-    if (!supabase || !profile) return;
+    if (!supabase || !profile || !session?.user) return;
     setSubmitting(true);
     setMessage("");
 
@@ -505,16 +533,23 @@ export function FoodMatchApp() {
       if (roomError) throw roomError;
       if (!roomData) throw new Error("Room not found.");
 
-      await getMembersTable().upsert({
+      const { error: memberError } = await getMembersTable().insert({
         room_id: roomData.id,
-        user_id: session?.user.id,
+        user_id: session.user.id,
         name: profile.full_name,
       });
+
+      if (memberError && !memberError.message?.toLowerCase().includes("duplicate")) {
+        throw memberError;
+      }
 
       setRoomStage("lobby");
       setCategoryVotes([]);
       setRestaurantVotes([]);
+      setRoomMembers([]);
       setActiveRoom(roomData as RoomRecord);
+      syncRoomMembers(roomData.host_name);
+      syncRoomMembers(profile.full_name);
       setRoomMode("join");
       setScreen("room");
     } catch (error) {
