@@ -137,6 +137,27 @@ function mergeCategoryVotesFromServer(serverRows: RoomCategoryVote[], previous: 
   return merged;
 }
 
+function restaurantVoteMergeKey(vote: RoomRestaurantVote): string {
+  const userKey = vote.user_id ? vote.user_id : vote.member_name ? `n:${vote.member_name}` : "";
+  return `${userKey}::${vote.restaurant_id}`;
+}
+
+function mergeRestaurantVotesFromServer(
+  serverRows: RoomRestaurantVote[],
+  previous: RoomRestaurantVote[],
+): RoomRestaurantVote[] {
+  const merged = [...serverRows];
+  const seen = new Set(serverRows.map(restaurantVoteMergeKey));
+  for (const vote of previous) {
+    if (typeof vote.id !== "string" || !vote.id.startsWith("local-rest-")) continue;
+    const key = restaurantVoteMergeKey(vote);
+    if (seen.has(key)) continue;
+    merged.push(vote);
+    seen.add(key);
+  }
+  return merged;
+}
+
 function roomMemberKey(member: RoomMember): string {
   return member.user_id ?? `n:${member.name}`;
 }
@@ -1023,6 +1044,7 @@ export function FoodMatchApp() {
       }
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not save your restaurant vote."));
+      throw error;
     }
   }
 
@@ -1208,13 +1230,19 @@ export function FoodMatchApp() {
           if (!active) return;
 
           const rows = (legacy.data as Omit<RoomRestaurantVote, "user_id">[] | null) ?? [];
-          setRestaurantVotes(rows.map((row) => ({ ...row, user_id: null })));
+          setRestaurantVotes((prev) =>
+            mergeRestaurantVotesFromServer(
+              rows.map((row) => ({ ...row, user_id: null })),
+              prev,
+            ),
+          );
         }
 
         return;
       }
 
-      setRestaurantVotes(((primary.data as RoomRestaurantVote[] | null) ?? []).filter(Boolean));
+      const rows = ((primary.data as RoomRestaurantVote[] | null) ?? []).filter(Boolean);
+      setRestaurantVotes((prev) => mergeRestaurantVotesFromServer(rows, prev));
     }
 
     void loadCategoryVotes();
@@ -1929,6 +1957,12 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   const extraPhotos = photos.slice(1);
   const heroTapRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const lightboxSwipeX0 = useRef<number | null>(null);
+  const lbPrevIdxRef = useRef<number | null>(null);
+  const [lbAnim, setLbAnim] = useState<{ opacity: number; tx: number; transition: string }>({
+    opacity: 1,
+    tx: 0,
+    transition: "none",
+  });
 
   useEffect(() => {
     setLightboxIndex(null);
@@ -1948,6 +1982,34 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
       document.body.style.overflow = previous;
     };
   }, [lightboxOpen]);
+
+  useEffect(() => {
+    if (!lightboxOpen || lightboxIndex === null) {
+      lbPrevIdxRef.current = null;
+      setLbAnim({ opacity: 1, tx: 0, transition: "none" });
+      return;
+    }
+    if (photos.length === 0) return;
+    const prev = lbPrevIdxRef.current;
+    lbPrevIdxRef.current = lightboxIndex;
+    if (prev === null) {
+      setLbAnim({ opacity: 1, tx: 0, transition: "opacity 200ms ease-out" });
+      return;
+    }
+    if (prev === lightboxIndex) return;
+    const fromX = lightboxIndex > prev ? 48 : -48;
+    setLbAnim({ opacity: 0.35, tx: fromX, transition: "none" });
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        setLbAnim({
+          opacity: 1,
+          tx: 0,
+          transition: "opacity 260ms ease-out, transform 320ms cubic-bezier(0.22, 1, 0.36, 1)",
+        });
+      });
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [lightboxOpen, lightboxIndex, photos.length]);
 
   useEffect(() => {
     if (!lightboxOpen || photos.length === 0) return;
@@ -2057,13 +2119,22 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
               </button>
             </>
           ) : null}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={lightboxSrc}
-            alt=""
-            className="max-h-[min(88dvh,920px)] w-auto max-w-[min(96vw,920px)] object-contain select-none"
-            draggable={false}
-          />
+          <div
+            className="flex max-h-[min(88dvh,920px)] max-w-[min(96vw,920px)] items-center justify-center"
+            style={{
+              opacity: lbAnim.opacity,
+              transform: `translateX(${lbAnim.tx}px)`,
+              transition: lbAnim.transition,
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightboxSrc}
+              alt=""
+              className="max-h-[min(88dvh,920px)] w-auto max-w-[min(96vw,920px)] object-contain select-none"
+              draggable={false}
+            />
+          </div>
         </div>
       </div>,
       document.body,
@@ -2248,7 +2319,7 @@ function RoomScreen({
   onChangeStage: (value: RoomStage) => void;
   onStartRestaurantRound: () => void;
   onCategoryBatchSubmit: (likeIds: readonly string[]) => Promise<void>;
-  onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void;
+  onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void | Promise<void>;
   onRetryPlaces: () => void;
   onBack: () => void;
 }) {
@@ -2341,12 +2412,12 @@ function RoomScreen({
       ) : null}
 
       {stage === "categories" ? (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-          <p className="shrink-0 text-[10px] leading-snug text-white/48">
-            Tick what you want for this city. Unticked = pass. Saved rows are locked.
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+          <p className="shrink-0 text-sm leading-snug text-white/70">
+            Tap styles you want for this city. Untick = pass. Saved rows stay locked.
           </p>
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.035] px-0.5 py-0.5">
+          <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto overscroll-contain sm:gap-2.5">
             {categories.map((cat) => {
               const mine = myCategoryVotes.find((v) => v.category_id === cat.id);
               const locked = Boolean(mine);
@@ -2354,15 +2425,17 @@ function RoomScreen({
               return (
                 <label
                   key={cat.id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition hover:bg-white/[0.06] ${
-                    locked ? "cursor-default opacity-[0.72]" : ""
+                  className={`flex min-h-[3.35rem] cursor-pointer items-center gap-2 rounded-2xl border border-white/12 bg-white/[0.06] px-2.5 py-2 transition hover:bg-white/[0.1] active:scale-[0.98] sm:min-h-[3.5rem] sm:gap-2.5 sm:px-3 sm:py-2.5 ${
+                    locked ? "cursor-default opacity-[0.78]" : ""
                   }`}
                 >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-white/12 bg-white/[0.07] text-[15px] leading-none">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/14 bg-white/[0.08] text-[22px] leading-none sm:h-10 sm:w-10 sm:text-2xl">
                     {cat.emoji}
                   </span>
-                  <span className="min-w-0 flex-1 text-[12px] font-medium leading-tight text-white/88">{cat.title}</span>
-                  <span className="relative grid h-4 w-4 shrink-0 place-items-center">
+                  <span className="min-w-0 flex-1 text-[13px] font-semibold leading-snug text-white/92 sm:text-sm">
+                    {cat.title}
+                  </span>
+                  <span className="relative grid h-7 w-7 shrink-0 place-items-center">
                     <input
                       type="checkbox"
                       checked={checked}
@@ -2379,12 +2452,12 @@ function RoomScreen({
                       className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-default"
                     />
                     <span
-                      className={`pointer-events-none grid h-3.5 w-3.5 place-items-center rounded border ${
+                      className={`pointer-events-none grid h-5 w-5 place-items-center rounded-md border ${
                         checked ? "border-orange-300/55 bg-orange-400/30" : "border-white/22 bg-white/[0.06]"
                       }`}
                     >
                       {checked ? (
-                        <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-white" fill="none" aria-hidden>
+                        <svg viewBox="0 0 12 12" className="h-3 w-3 text-white" fill="none" aria-hidden>
                           <path
                             d="M2 6l3 3 5-6"
                             stroke="currentColor"
@@ -2412,7 +2485,7 @@ function RoomScreen({
                 setCategoryBatchSubmitting(false);
               }
             }}
-            className={primaryButtonCompactClass}
+            className={`${primaryButtonClass} shrink-0 text-base`}
           >
             {categoryBatchSubmitting
               ? "Saving…"
@@ -2720,8 +2793,8 @@ function SwipePanel<T>({
   nextItem: T | null;
   likeLabel: string;
   skipLabel: string;
-  onLike: (item: T) => void;
-  onSkip: (item: T) => void;
+  onLike: (item: T) => void | Promise<void>;
+  onSkip: (item: T) => void | Promise<void>;
   renderCard: (item: T) => React.ReactNode;
   fillHeight?: boolean;
 }) {
@@ -2733,6 +2806,8 @@ function SwipePanel<T>({
   dragXRef.current = dragX;
 
   const itemKey = swipeItemStableKey(item);
+  const itemKeyRef = useRef(itemKey);
+  itemKeyRef.current = itemKey;
 
   const reset = useCallback(() => {
     gestureItemRef.current = null;
@@ -2750,14 +2825,31 @@ function SwipePanel<T>({
       if (!target) return;
       isDraggingRef.current = true;
       setDragX(direction === "like" ? 560 : -560);
+      const committedKey = swipeItemStableKey(target);
       window.setTimeout(() => {
-        if (direction === "like") {
-          onLike(target);
-        } else {
-          onSkip(target);
-        }
-        reset();
-      }, 110);
+        void (async () => {
+          try {
+            if (direction === "like") {
+              await Promise.resolve(onLike(target));
+            } else {
+              await Promise.resolve(onSkip(target));
+            }
+          } catch {
+            reset();
+            return;
+          } finally {
+            isDraggingRef.current = false;
+            gestureItemRef.current = null;
+          }
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (itemKeyRef.current === committedKey) {
+                reset();
+              }
+            });
+          });
+        })();
+      }, 200);
     },
     [onLike, onSkip, reset],
   );
