@@ -2258,7 +2258,7 @@ function RoomScreen({
                   Restaurant likes: {restaurantVotesCount}
                 </span>
                 <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                  City places: {cityRestaurants.length}
+                  Sample places: {cityRestaurants.length}
                 </span>
               </div>
             </div>

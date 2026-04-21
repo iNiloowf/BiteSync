@@ -105,7 +105,8 @@ export async function GET(request: Request) {
       ? `Best ${likedLabels.join(" and ")} restaurants and food places in ${city}, ${country}`
       : `Restaurants and food in ${city}, ${country}`;
 
-  const maxResultCount = likedLabels.length > 0 ? 24 : 16;
+  // Google Places Text Search caps results per request (not "all restaurants in the city").
+  const maxResultCount = 20;
 
   try {
     const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
