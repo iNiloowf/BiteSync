@@ -1,8 +1,11 @@
+---
+description: Git push workflow, red user-action notes, English replies
+alwaysApply: true
+---
+
 # Agent rules (BiteSync / food-match-web)
 
-Instructions for the coding agent when working in this repository.
-
-For **Cursor**, the same behavior is defined in `.cursor/rules/agent-rules.mdc` (`alwaysApply: true`). When you change these rules, update both files so they stay aligned.
+Keep in sync with `agent-rules.md` at the repository root when editing these instructions.
 
 ## Git: when the user says “push kon” (or “push”)
 
