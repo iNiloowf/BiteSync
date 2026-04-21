@@ -132,6 +132,7 @@ export function FoodMatchApp() {
   const [roomStage, setRoomStage] = useState<RoomStage>("lobby");
   const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
   const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
+  const [swipePickLabel, setSwipePickLabel] = useState("");
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -188,6 +189,68 @@ export function FoodMatchApp() {
     [getMembersTable],
   );
 
+  const insertCategoryVote = useCallback(
+    async (row: {
+      room_id: string;
+      user_id: string;
+      member_name: string;
+      category_id: string;
+      decision: "like" | "skip";
+    }) => {
+      const table = getCategoryVotesTable();
+      const { error } = await table.insert(row);
+
+      if (!error) {
+        return null;
+      }
+
+      if (!isMissingColumnError(error, "user_id")) {
+        return error;
+      }
+
+      const { error: fallbackError } = await table.insert({
+        room_id: row.room_id,
+        member_name: row.member_name,
+        category_id: row.category_id,
+        decision: row.decision,
+      });
+
+      return fallbackError ?? null;
+    },
+    [getCategoryVotesTable],
+  );
+
+  const insertRestaurantVote = useCallback(
+    async (row: {
+      room_id: string;
+      user_id: string;
+      member_name: string;
+      restaurant_id: string;
+      decision: "like" | "skip";
+    }) => {
+      const table = getRestaurantVotesTable();
+      const { error } = await table.insert(row);
+
+      if (!error) {
+        return null;
+      }
+
+      if (!isMissingColumnError(error, "user_id")) {
+        return error;
+      }
+
+      const { error: fallbackError } = await table.insert({
+        room_id: row.room_id,
+        member_name: row.member_name,
+        restaurant_id: row.restaurant_id,
+        decision: row.decision,
+      });
+
+      return fallbackError ?? null;
+    },
+    [getRestaurantVotesTable],
+  );
+
   const syncRoomMembers = useCallback((memberName: string) => {
     setRoomMembers((current) => {
       if (current.some((member) => member.name === memberName)) {
@@ -214,8 +277,13 @@ export function FoodMatchApp() {
   const memberCount = visibleRoomMembers.length || 1;
 
   const myCategoryVotes = useMemo(
-    () => categoryVotes.filter((vote) => vote.user_id === currentUserId),
-    [categoryVotes, currentUserId],
+    () =>
+      categoryVotes.filter(
+        (vote) =>
+          (currentUserId && vote.user_id === currentUserId) ||
+          (vote.user_id == null && profile && vote.member_name === profile.full_name),
+      ),
+    [categoryVotes, currentUserId, profile],
   );
 
   const pendingCategories = useMemo(
@@ -261,8 +329,13 @@ export function FoodMatchApp() {
   );
 
   const myRestaurantVotes = useMemo(
-    () => restaurantVotes.filter((vote) => vote.user_id === currentUserId),
-    [currentUserId, restaurantVotes],
+    () =>
+      restaurantVotes.filter(
+        (vote) =>
+          (currentUserId && vote.user_id === currentUserId) ||
+          (vote.user_id == null && profile && vote.member_name === profile.full_name),
+      ),
+    [currentUserId, profile, restaurantVotes],
   );
 
   const pendingRestaurants = useMemo(
@@ -551,6 +624,7 @@ export function FoodMatchApp() {
       setCategoryVotes([]);
       setRestaurantVotes([]);
       setRoomMembers([]);
+      setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
       syncRoomMembers(profile.full_name);
       setRoomMode("host");
@@ -587,6 +661,7 @@ export function FoodMatchApp() {
       setCategoryVotes([]);
       setRestaurantVotes([]);
       setRoomMembers([]);
+      setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
       syncRoomMembers(roomData.host_name);
       syncRoomMembers(profile.full_name);
@@ -604,11 +679,14 @@ export function FoodMatchApp() {
 
     try {
       const alreadyVoted = categoryVotes.some(
-        (vote) => vote.user_id === currentUserId && vote.category_id === categoryId,
+        (vote) =>
+          vote.category_id === categoryId &&
+          (vote.user_id === currentUserId ||
+            (vote.user_id == null && vote.member_name === profile.full_name)),
       );
 
       if (!alreadyVoted) {
-        const { error } = await getCategoryVotesTable().insert({
+        const insertError = await insertCategoryVote({
           room_id: activeRoom.id,
           user_id: currentUserId,
           member_name: profile.full_name,
@@ -616,8 +694,11 @@ export function FoodMatchApp() {
           decision,
         });
 
-        if (error) throw error;
+        if (insertError) throw insertError;
       }
+
+      const picked = categories.find((c) => c.id === categoryId);
+      setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${picked?.title ?? categoryId}`);
 
       const remaining = pendingCategories.filter((category) => category.id !== categoryId);
       if (remaining.length === 0) {
@@ -633,11 +714,14 @@ export function FoodMatchApp() {
 
     try {
       const alreadyVoted = restaurantVotes.some(
-        (vote) => vote.user_id === currentUserId && vote.restaurant_id === restaurantId,
+        (vote) =>
+          vote.restaurant_id === restaurantId &&
+          (vote.user_id === currentUserId ||
+            (vote.user_id == null && vote.member_name === profile.full_name)),
       );
 
       if (!alreadyVoted) {
-        const { error } = await getRestaurantVotesTable().insert({
+        const insertError = await insertRestaurantVote({
           room_id: activeRoom.id,
           user_id: currentUserId,
           member_name: profile.full_name,
@@ -645,8 +729,13 @@ export function FoodMatchApp() {
           decision,
         });
 
-        if (error) throw error;
+        if (insertError) throw insertError;
       }
+
+      const place =
+        visibleCityRestaurants.find((r) => r.id === restaurantId) ??
+        restaurantCandidates.find((r) => r.id === restaurantId);
+      setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${place?.name ?? restaurantId}`);
 
       const remaining = pendingRestaurants.filter((restaurant) => restaurant.id !== restaurantId);
       if (remaining.length === 0) {
@@ -712,27 +801,61 @@ export function FoodMatchApp() {
     let active = true;
 
     async function loadCategoryVotes() {
-      const { data } = await client
+      const primary = await client
         .from("room_category_votes")
         .select("id,user_id,category_id,decision,member_name")
         .eq("room_id", roomId)
         .order("created_at", { ascending: true });
 
-      if (active) {
-        setCategoryVotes(((data as RoomCategoryVote[] | null) ?? []).filter(Boolean));
+      if (!active) return;
+
+      if (primary.error) {
+        if (isMissingColumnError(primary.error, "user_id")) {
+          const legacy = await client
+            .from("room_category_votes")
+            .select("id,category_id,decision,member_name")
+            .eq("room_id", roomId)
+            .order("created_at", { ascending: true });
+
+          if (!active) return;
+
+          const rows = (legacy.data as Omit<RoomCategoryVote, "user_id">[] | null) ?? [];
+          setCategoryVotes(rows.map((row) => ({ ...row, user_id: null })));
+        }
+
+        return;
       }
+
+      setCategoryVotes(((primary.data as RoomCategoryVote[] | null) ?? []).filter(Boolean));
     }
 
     async function loadRestaurantVotes() {
-      const { data } = await client
+      const primary = await client
         .from("room_restaurant_votes")
         .select("id,user_id,restaurant_id,decision,member_name")
         .eq("room_id", roomId)
         .order("created_at", { ascending: true });
 
-      if (active) {
-        setRestaurantVotes(((data as RoomRestaurantVote[] | null) ?? []).filter(Boolean));
+      if (!active) return;
+
+      if (primary.error) {
+        if (isMissingColumnError(primary.error, "user_id")) {
+          const legacy = await client
+            .from("room_restaurant_votes")
+            .select("id,restaurant_id,decision,member_name")
+            .eq("room_id", roomId)
+            .order("created_at", { ascending: true });
+
+          if (!active) return;
+
+          const rows = (legacy.data as Omit<RoomRestaurantVote, "user_id">[] | null) ?? [];
+          setRestaurantVotes(rows.map((row) => ({ ...row, user_id: null })));
+        }
+
+        return;
       }
+
+      setRestaurantVotes(((primary.data as RoomRestaurantVote[] | null) ?? []).filter(Boolean));
     }
 
     void loadCategoryVotes();
@@ -949,11 +1072,13 @@ export function FoodMatchApp() {
                 pendingRestaurants={pendingRestaurants}
                 finalRestaurants={finalRestaurants}
                 restaurantsLoading={restaurantsLoading}
+                swipePickLabel={swipePickLabel}
                 onStart={() => setRoomStage("categories")}
                 onChangeStage={setRoomStage}
                 onCategoryDecision={handleCategoryDecision}
                 onRestaurantDecision={handleRestaurantDecision}
                 onBack={() => {
+                  setSwipePickLabel("");
                   setScreen("home");
                   setRoomStage("lobby");
                 }}
@@ -1315,6 +1440,7 @@ function RoomScreen({
   pendingRestaurants,
   finalRestaurants,
   restaurantsLoading,
+  swipePickLabel,
   onStart,
   onChangeStage,
   onCategoryDecision,
@@ -1334,6 +1460,7 @@ function RoomScreen({
   pendingRestaurants: CityRestaurant[];
   finalRestaurants: CityRestaurant[];
   restaurantsLoading: boolean;
+  swipePickLabel: string;
   onStart: () => void;
   onChangeStage: (value: RoomStage) => void;
   onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
@@ -1616,6 +1743,12 @@ function RoomScreen({
       {immersive ? (
         <div className="room-swipe-reveal flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
           <div className="min-h-0 flex-1 overflow-y-auto pb-2">{swipeStages}</div>
+          {(stage === "categories" || stage === "restaurants") && swipePickLabel ? (
+            <div className="shrink-0 border-t border-white/10 bg-[#141117]/95 px-4 py-3 text-center">
+              <p className="text-xs uppercase tracking-[0.22em] text-white/45">Your pick</p>
+              <p className="mt-1 text-sm font-semibold text-white">{swipePickLabel}</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1713,15 +1846,6 @@ function SwipePanel<T>({
           </div>
         </div>
       </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={() => commit("skip")} className={swipeGhostButtonClass}>
-          Swipe left
-        </button>
-        <button onClick={() => commit("like")} className={swipePrimaryButtonClass}>
-          Swipe right
-        </button>
-      </div>
     </div>
   );
 }
@@ -1786,20 +1910,25 @@ function isMissingColumnError(error: unknown, columnName: string) {
   return message.includes("schema cache") && message.includes(normalizedColumn);
 }
 
-function getSharedLikedIds<T extends { user_id: string | null; decision: "like" | "skip" }>(params: {
-  votes: T[];
-  itemKey: "category_id" | "restaurant_id";
-  memberCount: number;
-  fallbackVotes: T[];
-}) {
+function getSharedLikedIds<T extends { user_id: string | null; decision: "like" | "skip"; member_name?: string }>(
+  params: {
+    votes: T[];
+    itemKey: "category_id" | "restaurant_id";
+    memberCount: number;
+    fallbackVotes: T[];
+  },
+) {
   const { votes, itemKey, memberCount, fallbackVotes } = params;
 
   const likedCounts = new Map<string, Set<string>>();
   for (const vote of votes) {
     const itemId = (vote as T & Record<string, string>)[itemKey];
-    if (!itemId || vote.decision !== "like" || !vote.user_id) continue;
+    const voterKey =
+      vote.user_id ??
+      (typeof vote.member_name === "string" && vote.member_name ? `n:${vote.member_name}` : "");
+    if (!itemId || vote.decision !== "like" || !voterKey) continue;
     const users = likedCounts.get(itemId) ?? new Set<string>();
-    users.add(vote.user_id);
+    users.add(voterKey);
     likedCounts.set(itemId, users);
   }
 
@@ -1837,9 +1966,3 @@ const primaryCardClass =
 
 const menuItemClass =
   "w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-white/80 transition hover:bg-white/8";
-
-const swipeGhostButtonClass =
-  "w-full rounded-full border border-white/10 bg-white/6 px-5 py-3 font-semibold text-white/78";
-
-const swipePrimaryButtonClass =
-  "w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950";
