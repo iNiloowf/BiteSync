@@ -695,6 +695,29 @@ export function FoodMatchApp() {
         });
 
         if (insertError) throw insertError;
+
+        const optimistic: RoomCategoryVote = {
+          id: `local-cat-${categoryId}-${Date.now()}`,
+          user_id: currentUserId,
+          member_name: profile.full_name,
+          category_id: categoryId,
+          decision,
+        };
+
+        setCategoryVotes((prev) => {
+          if (
+            prev.some(
+              (vote) =>
+                vote.category_id === categoryId &&
+                (vote.user_id === currentUserId ||
+                  (vote.user_id == null && vote.member_name === profile.full_name)),
+            )
+          ) {
+            return prev;
+          }
+
+          return [...prev, optimistic];
+        });
       }
 
       const picked = categories.find((c) => c.id === categoryId);
@@ -730,6 +753,29 @@ export function FoodMatchApp() {
         });
 
         if (insertError) throw insertError;
+
+        const optimistic: RoomRestaurantVote = {
+          id: `local-rest-${restaurantId}-${Date.now()}`,
+          user_id: currentUserId,
+          member_name: profile.full_name,
+          restaurant_id: restaurantId,
+          decision,
+        };
+
+        setRestaurantVotes((prev) => {
+          if (
+            prev.some(
+              (vote) =>
+                vote.restaurant_id === restaurantId &&
+                (vote.user_id === currentUserId ||
+                  (vote.user_id == null && vote.member_name === profile.full_name)),
+            )
+          ) {
+            return prev;
+          }
+
+          return [...prev, optimistic];
+        });
       }
 
       const place =
@@ -1492,9 +1538,12 @@ function RoomScreen({
     <>
       {stage === "categories" ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-between text-sm text-white/55">
-            <span>Swipe right to like, left to pass.</span>
-            <span>{pendingCategories.length} left</span>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-white/55">
+              Same as Tinder: <span className="text-white/75">swipe right = like</span>,{" "}
+              <span className="text-white/75">swipe left = pass</span>.
+            </p>
+            <span className="text-xs uppercase tracking-[0.2em] text-white/45">{pendingCategories.length} left</span>
           </div>
 
           {currentCategory ? (
@@ -1539,9 +1588,12 @@ function RoomScreen({
 
       {stage === "restaurants" ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-between text-sm text-white/55">
-            <span>Only places rated 4.0+ appear first.</span>
-            <span>{pendingRestaurants.length} left</span>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-white/55">
+              <span className="text-white/75">Right = like</span>, <span className="text-white/75">left = pass</span>.
+              4.0+ places are listed first.
+            </p>
+            <span className="text-xs uppercase tracking-[0.2em] text-white/45">{pendingRestaurants.length} left</span>
           </div>
 
           {restaurantsLoading ? (
