@@ -336,7 +336,15 @@ export function FoodMatchApp() {
     [activeRoom, cityRestaurants],
   );
   const currentUserId = session?.user.id ?? null;
-  const memberCount = visibleRoomMembers.length || 1;
+  const memberCount = useMemo(() => {
+    const keys = new Set<string>();
+    for (const member of visibleRoomMembers) {
+      const key = roomMemberKey(member);
+      if (!key || key === "n:") continue;
+      keys.add(key);
+    }
+    return keys.size > 0 ? keys.size : 1;
+  }, [visibleRoomMembers]);
 
   const myCategoryVotes = useMemo(
     () =>
@@ -1431,7 +1439,6 @@ export function FoodMatchApp() {
                 sharedCategoryIds={sharedCategoryIds}
                 restaurantFocusCategories={restaurantFocusCategories}
                 membersStillSwipingCategories={membersStillSwipingCategories}
-                cityRestaurants={visibleCityRestaurants}
                 pendingCategories={pendingCategories}
                 pendingRestaurants={pendingRestaurants}
                 finalRestaurants={finalRestaurants}
@@ -1920,7 +1927,6 @@ function RoomScreen({
   sharedCategoryIds,
   restaurantFocusCategories,
   membersStillSwipingCategories,
-  cityRestaurants,
   pendingCategories,
   pendingRestaurants,
   finalRestaurants,
@@ -1943,7 +1949,6 @@ function RoomScreen({
   sharedCategoryIds: string[];
   restaurantFocusCategories: Category[];
   membersStillSwipingCategories: RoomMember[];
-  cityRestaurants: CityRestaurant[];
   pendingCategories: typeof categories;
   pendingRestaurants: CityRestaurant[];
   finalRestaurants: CityRestaurant[];
@@ -1957,8 +1962,6 @@ function RoomScreen({
   onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void;
   onBack: () => void;
 }) {
-  const categoryVotesCount = categoryVotes.filter((vote) => vote.decision === "like").length;
-  const restaurantVotesCount = restaurantVotes.filter((vote) => vote.decision === "like").length;
   const currentCategory = pendingCategories[0] ?? null;
   const nextCategory = pendingCategories[1] ?? null;
   const currentRestaurant = pendingRestaurants[0] ?? null;
@@ -2243,23 +2246,6 @@ function RoomScreen({
                 <button type="button" onClick={handleStartClick} className={primaryButtonClass}>
                   Start swiping categories
                 </button>
-              </div>
-            </div>
-
-            <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-              <div className="flex flex-wrap gap-2 text-xs text-white/55">
-                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                  Shared categories: {sharedCategoryIds.length}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                  Category likes: {categoryVotesCount}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                  Restaurant likes: {restaurantVotesCount}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                  Sample places: {cityRestaurants.length}
-                </span>
               </div>
             </div>
           </div>
