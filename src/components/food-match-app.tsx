@@ -160,6 +160,34 @@ export function FoodMatchApp() {
     [supabase],
   );
 
+  const insertRoomMember = useCallback(
+    async (roomId: string, name: string, userId: string) => {
+      const membersTable = getMembersTable();
+
+      const { error } = await membersTable.insert({
+        room_id: roomId,
+        user_id: userId,
+        name,
+      });
+
+      if (!error) {
+        return null;
+      }
+
+      if (!isMissingColumnError(error, "user_id")) {
+        return error;
+      }
+
+      const { error: fallbackError } = await membersTable.insert({
+        room_id: roomId,
+        name,
+      });
+
+      return fallbackError ?? null;
+    },
+    [getMembersTable],
+  );
+
   const syncRoomMembers = useCallback((memberName: string) => {
     setRoomMembers((current) => {
       if (current.some((member) => member.name === memberName)) {
@@ -515,11 +543,7 @@ export function FoodMatchApp() {
         throw new Error("Could not generate a free room code. Please try again.");
       }
 
-      const { error: memberError } = await getMembersTable().insert({
-        room_id: roomData.id,
-        user_id: session.user.id,
-        name: profile.full_name,
-      });
+      const memberError = await insertRoomMember(roomData.id, profile.full_name, session.user.id);
 
       if (memberError) throw memberError;
 
@@ -553,11 +577,7 @@ export function FoodMatchApp() {
       if (roomError) throw roomError;
       if (!roomData) throw new Error("Room not found.");
 
-      const { error: memberError } = await getMembersTable().insert({
-        room_id: roomData.id,
-        user_id: session.user.id,
-        name: profile.full_name,
-      });
+      const memberError = await insertRoomMember(roomData.id, profile.full_name, session.user.id);
 
       if (memberError && !memberError.message?.toLowerCase().includes("duplicate")) {
         throw memberError;
@@ -1712,6 +1732,18 @@ function isDuplicateKeyError(error: unknown) {
 
   const maybeError = error as ErrorLike;
   return maybeError.code === "23505" || maybeError.message?.toLowerCase().includes("duplicate key") === true;
+}
+
+function isMissingColumnError(error: unknown, columnName: string) {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const maybeError = error as ErrorLike;
+  const message = maybeError.message?.toLowerCase() ?? "";
+  const normalizedColumn = columnName.toLowerCase();
+
+  return message.includes("schema cache") && message.includes(normalizedColumn);
 }
 
 function getSharedLikedIds<T extends { user_id: string | null; decision: "like" | "skip" }>(params: {
