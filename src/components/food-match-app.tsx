@@ -1927,6 +1927,8 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const photos = restaurant.photoUrls ?? [];
   const extraPhotos = photos.slice(1);
+  const heroTapRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
+  const lightboxSwipeX0 = useRef<number | null>(null);
 
   useEffect(() => {
     setLightboxIndex(null);
@@ -1992,7 +1994,29 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             {lightboxIndex + 1} / {photos.length}
           </p>
         ) : null}
-        <div className="relative flex min-h-0 flex-1 items-center justify-center pt-10">
+        <div
+          className="relative flex min-h-0 flex-1 items-center justify-center pt-10"
+          style={photos.length > 1 ? { touchAction: "none" } : undefined}
+          onPointerDown={(event) => {
+            if (photos.length < 2) return;
+            lightboxSwipeX0.current = event.clientX;
+          }}
+          onPointerUp={(event) => {
+            const x0 = lightboxSwipeX0.current;
+            lightboxSwipeX0.current = null;
+            if (x0 == null || photos.length < 2) return;
+            const dx = event.clientX - x0;
+            if (Math.abs(dx) < 56) return;
+            if (dx > 0) {
+              setLightboxIndex((i) => (i !== null && i > 0 ? i - 1 : i));
+            } else {
+              setLightboxIndex((i) => (i !== null && i < photos.length - 1 ? i + 1 : i));
+            }
+          }}
+          onPointerCancel={() => {
+            lightboxSwipeX0.current = null;
+          }}
+        >
           {photos.length > 1 ? (
             <>
               <button
@@ -2029,8 +2053,8 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
           <img
             src={lightboxSrc}
             alt=""
-            className="max-h-[min(88dvh,920px)] w-auto max-w-[min(96vw,920px)] object-contain"
-            onPointerDown={(event) => event.stopPropagation()}
+            className="max-h-[min(88dvh,920px)] w-auto max-w-[min(96vw,920px)] object-contain select-none"
+            draggable={false}
           />
         </div>
       </div>,
@@ -2045,9 +2069,28 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             <button
               type="button"
               aria-label="View photos"
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => setLightboxIndex(0)}
-              className="block h-full min-h-[min(140px,36dvh)] w-full cursor-zoom-in p-0 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70"
+              onPointerDown={(event) => {
+                heroTapRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+              }}
+              onPointerUp={(event) => {
+                const tap = heroTapRef.current;
+                heroTapRef.current = null;
+                if (!tap || tap.pointerId !== event.pointerId) return;
+                const moved = Math.hypot(event.clientX - tap.x, event.clientY - tap.y);
+                if (moved < 16) {
+                  setLightboxIndex(0);
+                }
+              }}
+              onPointerCancel={() => {
+                heroTapRef.current = null;
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setLightboxIndex(0);
+                }
+              }}
+              className="block h-full min-h-[min(140px,36dvh)] w-full cursor-grab touch-manipulation p-0 text-left focus:outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-orange-300/70"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
