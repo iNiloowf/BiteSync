@@ -936,7 +936,6 @@ export function FoodMatchApp() {
 
             {screen === "room" ? (
               <RoomScreen
-                profile={profile}
                 room={activeRoom}
                 mode={roomMode}
                 stage={roomStage}
@@ -1303,7 +1302,6 @@ function ProfileScreen({
 }
 
 function RoomScreen({
-  profile,
   room,
   mode,
   stage,
@@ -1323,7 +1321,6 @@ function RoomScreen({
   onRestaurantDecision,
   onBack,
 }: {
-  profile: Profile | null;
   room: RoomRecord | null;
   mode: RoomMode;
   stage: RoomStage;
@@ -1350,52 +1347,217 @@ function RoomScreen({
   const currentRestaurant = pendingRestaurants[0] ?? null;
   const nextRestaurant = pendingRestaurants[1] ?? null;
 
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
-      <div className="flex items-center justify-between">
-        <button onClick={onBack} className={ghostButtonClass}>
-          Back
-        </button>
-        <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.24em] text-white/70">
-          {mode === "host" ? "Host mode" : "Joined"}
-        </span>
-      </div>
+  const [enterSwipe, setEnterSwipe] = useState(false);
 
-      <div className="rounded-[24px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
-        <div className="rounded-[23px] bg-[#161218] px-4 py-3">
-          <p className="text-xs text-white/55">{mode === "host" ? "Your room is live" : "You are inside the room"}</p>
-          <h1 className="mt-1.5 text-3xl font-semibold tracking-[0.14em] text-white">{room?.code}</h1>
-          <p className="mt-1.5 text-xs text-white/58">
-            {room?.city}, {room?.country_code}
-          </p>
-        </div>
-      </div>
+  const handleStartClick = () => {
+    setEnterSwipe(true);
+    window.setTimeout(() => {
+      onStart();
+      setEnterSwipe(false);
+    }, 520);
+  };
 
-      <div className="space-y-3">
-        <div className="min-h-0 grid flex-1 gap-3 overflow-y-auto">
-          <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <p className="text-sm text-white/55">People in this room</p>
-            <div className="mt-3 space-y-2">
-              {roomMembers.length > 0 ? (
-                roomMembers.map((member) => (
-                  <div key={member.id} className="flex items-center justify-between rounded-2xl bg-white/6 px-4 py-3">
-                    <span className="font-medium text-white">{member.name}</span>
-                    <span className="text-xs text-white/45">joined</span>
+  const showLobbyChrome = stage === "lobby" && !enterSwipe;
+  const showStartTransition = stage === "lobby" && enterSwipe;
+  const immersive = stage !== "lobby";
+
+  const swipeStages = (
+    <>
+      {stage === "categories" ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-sm text-white/55">
+            <span>Swipe right to like, left to pass.</span>
+            <span>{pendingCategories.length} left</span>
+          </div>
+
+          {currentCategory ? (
+            <SwipePanel
+              item={currentCategory}
+              nextItem={nextCategory}
+              likeLabel="Like"
+              skipLabel="Pass"
+              onLike={() => onCategoryDecision(currentCategory.id, "like")}
+              onSkip={() => onCategoryDecision(currentCategory.id, "skip")}
+              renderCard={(category) => (
+                <div
+                  className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}
+                >
+                  <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
+                    <div className="text-6xl">{category.emoji}</div>
+                    <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
+                    <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
+                    <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
                   </div>
-                ))
-              ) : (
-                <p className="text-sm text-white/55">No one has joined yet.</p>
+                </div>
               )}
+            />
+          ) : (
+            <div className="rounded-2xl bg-white/6 p-4">
+              <p className="text-lg font-semibold text-white">Your category swipes are done.</p>
+              <p className="mt-2 text-sm leading-6 text-white/58">
+                {sharedCategoryIds.length > 0
+                  ? "BiteSync found shared categories. Continue to restaurant swipes."
+                  : "Waiting for shared category matches. If you are solo, your liked categories will be used."}
+              </p>
+              <button
+                onClick={() => onChangeStage("restaurants")}
+                className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
+              >
+                Continue to restaurants
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {stage === "restaurants" ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-sm text-white/55">
+            <span>Only places rated 4.0+ appear first.</span>
+            <span>{pendingRestaurants.length} left</span>
+          </div>
+
+          {restaurantsLoading ? (
+            <div className="rounded-2xl bg-white/6 p-4 text-sm text-white/58">
+              Looking up restaurants in {room?.city}...
+            </div>
+          ) : currentRestaurant ? (
+            <SwipePanel
+              item={currentRestaurant}
+              nextItem={nextRestaurant}
+              likeLabel="Like"
+              skipLabel="Pass"
+              onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
+              onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
+              renderCard={(restaurant) => (
+                <div className="min-h-[320px] rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.28em] text-white/38">Restaurant</p>
+                      <h3 className="mt-3 text-3xl font-semibold text-white">{restaurant.name}</h3>
+                    </div>
+                    <div className="rounded-2xl bg-white/8 px-3 py-2 text-right">
+                      <p className="text-lg font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                      <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                    </div>
+                  </div>
+                  <p className="mt-4 text-sm leading-6 text-white/58">{restaurant.address}</p>
+                  <div className="mt-5 flex flex-wrap gap-2 text-xs text-white/70">
+                    <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                      {restaurant.priceLevel ?? "Price unknown"}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                      {restaurant.primaryType ?? "Restaurant"}
+                    </span>
+                  </div>
+                </div>
+              )}
+            />
+          ) : (
+            <div className="rounded-2xl bg-white/6 p-4">
+              <p className="text-lg font-semibold text-white">Restaurant swipes are done.</p>
+              <p className="mt-2 text-sm leading-6 text-white/58">
+                {restaurantCandidates.length > 0
+                  ? "BiteSync is ready to show the places everyone liked."
+                  : "No matching restaurants yet for the shared categories in this city."}
+              </p>
+              <button
+                onClick={() => onChangeStage("final")}
+                className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
+              >
+                Show final picks
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {stage === "final" ? (
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-white/6 p-4">
+            <p className="text-lg font-semibold text-white">Final matches</p>
+            <p className="mt-2 text-sm leading-6 text-white/58">
+              These are the restaurants liked by everyone in the room. They are sorted from highest rating down.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {finalRestaurants.length > 0 ? (
+              finalRestaurants.map((restaurant) => (
+                <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-white">{restaurant.name}</p>
+                      <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                      <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
+                No restaurant has been liked by everyone yet. Keep swiping or wait for the rest of the room to finish.
+              </div>
+            )}
+          </div>
+
+          <button onClick={() => onChangeStage("restaurants")} className={ghostButtonClass}>
+            Back to restaurant cards
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {showLobbyChrome ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-5">
+          <div className="flex items-center justify-between">
+            <button onClick={onBack} className={ghostButtonClass}>
+              Back
+            </button>
+            <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.24em] text-white/70">
+              {mode === "host" ? "Host mode" : "Joined"}
+            </span>
+          </div>
+
+          <div className="rounded-[24px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
+            <div className="rounded-[23px] bg-[#161218] px-4 py-3">
+              <p className="text-xs text-white/55">{mode === "host" ? "Your room is live" : "You are inside the room"}</p>
+              <h1 className="mt-1.5 text-3xl font-semibold tracking-[0.14em] text-white">{room?.code}</h1>
+              <p className="mt-1.5 text-xs text-white/58">
+                {room?.city}, {room?.country_code}
+              </p>
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-white/55">Room flow</p>
-              <span className="text-xs uppercase tracking-[0.22em] text-white/45">{stage}</span>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+            <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+              <p className="text-sm text-white/55">People in this room</p>
+              <div className="mt-3 space-y-2">
+                {roomMembers.length > 0 ? (
+                  roomMembers.map((member) => (
+                    <div key={member.id} className="flex items-center justify-between rounded-2xl bg-white/6 px-4 py-3">
+                      <span className="font-medium text-white">{member.name}</span>
+                      <span className="text-xs text-white/45">joined</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-white/55">No one has joined yet.</p>
+                )}
+              </div>
             </div>
 
-            {stage === "lobby" ? (
+            <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-white/55">Room flow</p>
+                <span className="text-xs uppercase tracking-[0.22em] text-white/45">{stage}</span>
+              </div>
+
               <div className="mt-4 space-y-3">
                 <div className="rounded-2xl bg-white/6 px-3 py-3">
                   <p className="text-base font-semibold text-white">Start when you are ready.</p>
@@ -1404,179 +1566,58 @@ function RoomScreen({
                   </p>
                 </div>
 
-                <button onClick={onStart} className={primaryButtonClass}>
+                <button type="button" onClick={handleStartClick} className={primaryButtonClass}>
                   Start swiping categories
                 </button>
               </div>
-            ) : null}
+            </div>
 
-            {stage === "categories" ? (
-              <div className="mt-4 space-y-4">
-                <div className="flex items-center justify-between text-sm text-white/55">
-                  <span>Swipe right to like, left to pass.</span>
-                  <span>{pendingCategories.length} left</span>
-                </div>
-
-                {currentCategory ? (
-                  <SwipePanel
-                    item={currentCategory}
-                    nextItem={nextCategory}
-                    likeLabel="Like"
-                    skipLabel="Pass"
-                    onLike={() => onCategoryDecision(currentCategory.id, "like")}
-                    onSkip={() => onCategoryDecision(currentCategory.id, "skip")}
-                    renderCard={(category) => (
-                      <div
-                        className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}
-                      >
-                        <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
-                          <div className="text-6xl">{category.emoji}</div>
-                          <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
-                          <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
-                          <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
-                        </div>
-                      </div>
-                    )}
-                  />
-                ) : (
-                  <div className="rounded-2xl bg-white/6 p-4">
-                    <p className="text-lg font-semibold text-white">Your category swipes are done.</p>
-                    <p className="mt-2 text-sm leading-6 text-white/58">
-                      {sharedCategoryIds.length > 0
-                        ? "BiteSync found shared categories. Continue to restaurant swipes."
-                        : "Waiting for shared category matches. If you are solo, your liked categories will be used."}
-                    </p>
-                    <button
-                      onClick={() => onChangeStage("restaurants")}
-                      className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
-                    >
-                      Continue to restaurants
-                    </button>
-                  </div>
-                )}
+            <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+              <div className="flex flex-wrap gap-2 text-xs text-white/55">
+                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                  Shared categories: {sharedCategoryIds.length}
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                  Category likes: {categoryVotesCount}
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                  Restaurant likes: {restaurantVotesCount}
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
+                  City places: {cityRestaurants.length}
+                </span>
               </div>
-            ) : null}
-
-            {stage === "restaurants" ? (
-              <div className="mt-4 space-y-4">
-                <div className="flex items-center justify-between text-sm text-white/55">
-                  <span>Only places rated 4.0+ appear first.</span>
-                  <span>{pendingRestaurants.length} left</span>
-                </div>
-
-                {restaurantsLoading ? (
-                  <div className="rounded-2xl bg-white/6 p-4 text-sm text-white/58">
-                    Looking up restaurants in {room?.city}...
-                  </div>
-                ) : currentRestaurant ? (
-                  <SwipePanel
-                    item={currentRestaurant}
-                    nextItem={nextRestaurant}
-                    likeLabel="Like"
-                    skipLabel="Pass"
-                    onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
-                    onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
-                    renderCard={(restaurant) => (
-                      <div className="min-h-[320px] rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.28em] text-white/38">Restaurant</p>
-                            <h3 className="mt-3 text-3xl font-semibold text-white">{restaurant.name}</h3>
-                          </div>
-                          <div className="rounded-2xl bg-white/8 px-3 py-2 text-right">
-                            <p className="text-lg font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                            <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                          </div>
-                        </div>
-                        <p className="mt-4 text-sm leading-6 text-white/58">{restaurant.address}</p>
-                        <div className="mt-5 flex flex-wrap gap-2 text-xs text-white/70">
-                          <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                            {restaurant.priceLevel ?? "Price unknown"}
-                          </span>
-                          <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                            {restaurant.primaryType ?? "Restaurant"}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  />
-                ) : (
-                  <div className="rounded-2xl bg-white/6 p-4">
-                    <p className="text-lg font-semibold text-white">Restaurant swipes are done.</p>
-                    <p className="mt-2 text-sm leading-6 text-white/58">
-                      {restaurantCandidates.length > 0
-                        ? "BiteSync is ready to show the places everyone liked."
-                        : "No matching restaurants yet for the shared categories in this city."}
-                    </p>
-                    <button
-                      onClick={() => onChangeStage("final")}
-                      className="mt-4 w-full rounded-full bg-white px-5 py-3 font-semibold text-stone-950"
-                    >
-                      Show final picks
-                    </button>
-                  </div>
-                )}
-              </div>
-            ) : null}
-
-            {stage === "final" ? (
-              <div className="mt-4 space-y-4">
-                <div className="rounded-2xl bg-white/6 p-4">
-                  <p className="text-lg font-semibold text-white">Final matches</p>
-                  <p className="mt-2 text-sm leading-6 text-white/58">
-                    These are the restaurants liked by everyone in the room. They are sorted from highest rating down.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  {finalRestaurants.length > 0 ? (
-                    finalRestaurants.map((restaurant) => (
-                      <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-white">{restaurant.name}</p>
-                            <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                            <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
-                      No restaurant has been liked by everyone yet. Keep swiping or wait for the rest of the room to
-                      finish.
-                    </div>
-                  )}
-                </div>
-
-                <button onClick={() => onChangeStage("restaurants")} className={ghostButtonClass}>
-                  Back to restaurant cards
-                </button>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <div className="flex flex-wrap gap-2 text-xs text-white/55">
-              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                Shared categories: {sharedCategoryIds.length}
-              </span>
-              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                Category likes: {categoryVotesCount}
-              </span>
-              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                Restaurant likes: {restaurantVotesCount}
-              </span>
-              <span className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5">
-                City places: {cityRestaurants.length}
-              </span>
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
+
+      {showStartTransition ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5">
+          <div className="relative flex h-32 w-32 items-center justify-center">
+            <div
+              className="absolute inset-0 rounded-full border-2 border-orange-400/25"
+              style={{ animation: "bitesync-orbit 1.6s ease-in-out infinite" }}
+            />
+            <div
+              className="absolute inset-3 rounded-full border border-white/20"
+              style={{ animation: "bitesync-orbit 1.6s ease-in-out infinite 0.2s" }}
+            />
+            <div
+              className="absolute inset-6 rounded-full border border-fuchsia-400/20"
+              style={{ animation: "bitesync-orbit 1.6s ease-in-out infinite 0.4s" }}
+            />
+            <span className="relative text-xs font-medium uppercase tracking-[0.32em] text-white/55">Starting</span>
+          </div>
+          <p className="text-sm text-white/40">Preparing your swipe deck</p>
+        </div>
+      ) : null}
+
+      {immersive ? (
+        <div className="room-swipe-reveal flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
+          <div className="min-h-0 flex-1 overflow-y-auto pb-2">{swipeStages}</div>
+        </div>
+      ) : null}
     </div>
   );
 }
