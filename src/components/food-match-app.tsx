@@ -2592,7 +2592,6 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
           {onHideForever ? (
             <button
               type="button"
-              onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
                 void onHideForever(restaurant);
@@ -2609,7 +2608,6 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
                 <button
                   key={src}
                   type="button"
-                  onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => setLightboxIndex(thumbIndex + 1)}
                   className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg ring-1 ring-white/20 transition hover:ring-white/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70 sm:h-14 sm:w-14"
                 >
@@ -3188,16 +3186,25 @@ function SwipePanel<T>({
 }) {
   const [dragX, setDragX] = useState(0);
   const startXRef = useRef(0);
+  const startYRef = useRef(0);
   const gestureItemRef = useRef<T | null>(null);
-  const isDraggingRef = useRef(false);
+  const dragCommittedRef = useRef(false);
+  const commitBusyRef = useRef(false);
+  const activePointerIdRef = useRef<number | null>(null);
   const dragXRef = useRef(0);
   dragXRef.current = dragX;
+
+  const swipeLayerRef = useRef<HTMLDivElement | null>(null);
+  const detachWindowListenersRef = useRef<(() => void) | null>(null);
 
   const itemKey = swipeItemStableKey(item);
 
   const reset = useCallback(() => {
+    detachWindowListenersRef.current?.();
+    detachWindowListenersRef.current = null;
+    activePointerIdRef.current = null;
+    dragCommittedRef.current = false;
     gestureItemRef.current = null;
-    isDraggingRef.current = false;
     setDragX(0);
   }, []);
 
@@ -3205,11 +3212,18 @@ function SwipePanel<T>({
     reset();
   }, [itemKey, reset]);
 
+  useEffect(() => {
+    return () => {
+      detachWindowListenersRef.current?.();
+      detachWindowListenersRef.current = null;
+    };
+  }, []);
+
   const commit = useCallback(
     (direction: "like" | "skip") => {
       const target = gestureItemRef.current;
       if (!target) return;
-      isDraggingRef.current = true;
+      commitBusyRef.current = true;
       setDragX(direction === "like" ? 560 : -560);
       window.setTimeout(() => {
         void (async () => {
@@ -3223,7 +3237,7 @@ function SwipePanel<T>({
             reset();
             return;
           } finally {
-            isDraggingRef.current = false;
+            commitBusyRef.current = false;
             gestureItemRef.current = null;
           }
         })();
@@ -3232,13 +3246,96 @@ function SwipePanel<T>({
     [onLike, onSkip, reset],
   );
 
+  const handlePointerDownCapture = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (commitBusyRef.current) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (!event.currentTarget.contains(event.target as Node)) return;
+
+      detachWindowListenersRef.current?.();
+
+      gestureItemRef.current = item;
+      startXRef.current = event.clientX;
+      startYRef.current = event.clientY;
+      activePointerIdRef.current = event.pointerId;
+      dragCommittedRef.current = false;
+
+      const pointerId = event.pointerId;
+
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId || activePointerIdRef.current !== pointerId) return;
+        const dx = ev.clientX - startXRef.current;
+        const dy = ev.clientY - startYRef.current;
+
+        if (!dragCommittedRef.current) {
+          if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+          if (Math.abs(dx) < Math.abs(dy) - 4) return;
+          dragCommittedRef.current = true;
+          try {
+            swipeLayerRef.current?.setPointerCapture(ev.pointerId);
+          } catch {
+            /* ignore */
+          }
+        }
+
+        setDragX(dx);
+        ev.preventDefault();
+      };
+
+      const onUpOrCancel = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId || activePointerIdRef.current !== pointerId) return;
+        activePointerIdRef.current = null;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUpOrCancel);
+        window.removeEventListener("pointercancel", onUpOrCancel);
+        detachWindowListenersRef.current = null;
+
+        try {
+          swipeLayerRef.current?.releasePointerCapture(ev.pointerId);
+        } catch {
+          /* ignore */
+        }
+
+        if (!dragCommittedRef.current) {
+          gestureItemRef.current = null;
+          return;
+        }
+
+        const x = ev.clientX - startXRef.current;
+        if (x > 90) {
+          void commit("like");
+          return;
+        }
+        if (x < -90) {
+          void commit("skip");
+          return;
+        }
+        gestureItemRef.current = null;
+        dragCommittedRef.current = false;
+        setDragX(0);
+      };
+
+      detachWindowListenersRef.current = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUpOrCancel);
+        window.removeEventListener("pointercancel", onUpOrCancel);
+        detachWindowListenersRef.current = null;
+      };
+
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUpOrCancel);
+      window.addEventListener("pointercancel", onUpOrCancel);
+    },
+    [item, commit],
+  );
+
   return (
     <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : "space-y-4"}>
       <div
         className={
           fillHeight
-            ? "relative flex-1 touch-none select-none overflow-hidden rounded-[28px] bg-[#161218] min-h-0 max-h-full"
-            : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-none select-none rounded-[28px] bg-[#161218] sm:h-[460px]"
+            ? "relative flex-1 touch-pan-y select-none overflow-hidden rounded-[28px] bg-[#161218] min-h-0 max-h-full"
+            : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-pan-y select-none rounded-[28px] bg-[#161218] sm:h-[460px]"
         }
       >
         {nextItem ? (
@@ -3256,37 +3353,8 @@ function SwipePanel<T>({
         ) : null}
 
         <div
-          onPointerDown={(event) => {
-            gestureItemRef.current = item;
-            startXRef.current = event.clientX;
-            isDraggingRef.current = true;
-            try {
-              event.currentTarget.setPointerCapture(event.pointerId);
-            } catch {
-              /* ignore */
-            }
-          }}
-          onPointerMove={(event) => {
-            if (!isDraggingRef.current) return;
-            setDragX(event.clientX - startXRef.current);
-          }}
-          onPointerUp={(event) => {
-            try {
-              event.currentTarget.releasePointerCapture(event.pointerId);
-            } catch {
-              /* ignore */
-            }
-            const x = dragXRef.current;
-            if (x > 90) {
-              commit("like");
-              return;
-            }
-            if (x < -90) {
-              commit("skip");
-              return;
-            }
-            reset();
-          }}
+          ref={swipeLayerRef}
+          onPointerDownCapture={handlePointerDownCapture}
           onPointerCancel={reset}
           className="absolute inset-0 z-10 isolate transform-gpu backface-hidden will-change-transform"
           style={{
