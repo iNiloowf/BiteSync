@@ -1310,6 +1310,7 @@ export function FoodMatchApp() {
 
   useEffect(() => {
     if (!activeRoom) {
+      setRestaurantsLoading(false);
       return;
     }
 
@@ -1392,6 +1393,7 @@ export function FoodMatchApp() {
     return () => {
       active = false;
       controller.abort();
+      setRestaurantsLoading(false);
     };
   }, [activeRoom, diningPlacesFetchKey]);
 
@@ -1923,11 +1925,11 @@ function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
 
   return (
     <>
-      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
-        <div className="relative min-h-0 flex-1 overflow-hidden bg-black/35">
+      <div className="flex h-full min-h-[min(260px,48dvh)] w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
+        <div className="relative min-h-[min(140px,36dvh)] flex-1 overflow-hidden bg-black/35">
           {photos[0] ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={photos[0]} alt="" className="h-full w-full object-cover" />
+            <img src={photos[0]} alt="" className="h-full min-h-[min(140px,36dvh)] w-full object-cover" />
           ) : (
             <div className="flex h-full min-h-[32dvh] items-center justify-center text-sm text-white/40">No image</div>
           )}
@@ -2172,7 +2174,7 @@ function RoomScreen({
       ) : null}
 
       {stage === "restaurants" ? (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+        <div className="flex min-h-[min(280px,56dvh)] min-w-0 flex-1 flex-col gap-2">
           {restaurantFocusCategories.length > 0 ? (
             <div className="shrink-0 rounded-xl border border-white/10 bg-white/6 px-3 py-2">
               <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Matching on</p>
@@ -2193,7 +2195,7 @@ function RoomScreen({
             {pendingRestaurants.length} left
           </div>
 
-          <div className="min-h-0 flex-1">
+          <div className="flex min-h-[min(240px,50dvh)] flex-1 flex-col">
             {restaurantsLoading ? (
               <div className="rounded-2xl bg-white/6 px-3 py-2 text-center text-[11px] text-white/50">
                 Loading {room?.city}…
@@ -2469,7 +2471,11 @@ function SwipePanel<T>({
   return (
     <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : "space-y-4"}>
       <div
-        className={fillHeight ? "relative min-h-0 flex-1 touch-none select-none" : "relative h-[340px] touch-none select-none"}
+        className={
+          fillHeight
+            ? "relative min-h-[min(300px,52dvh)] flex-1 touch-none select-none"
+            : "relative h-[340px] touch-none select-none"
+        }
       >
         {nextItem ? (
           <div
