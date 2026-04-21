@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 
 import { categories, countries, type Category } from "@/data/mock-data";
@@ -118,6 +118,23 @@ function categoryVoteKey(vote: RoomCategoryVote): string {
   if (vote.user_id) return vote.user_id;
   if (vote.member_name) return `n:${vote.member_name}`;
   return "";
+}
+
+function categoryVoteMergeKey(vote: RoomCategoryVote): string {
+  return `${categoryVoteKey(vote)}::${vote.category_id}`;
+}
+
+function mergeCategoryVotesFromServer(serverRows: RoomCategoryVote[], previous: RoomCategoryVote[]): RoomCategoryVote[] {
+  const merged = [...serverRows];
+  const seen = new Set(serverRows.map(categoryVoteMergeKey));
+  for (const vote of previous) {
+    if (typeof vote.id !== "string" || !vote.id.startsWith("local-cat-")) continue;
+    const key = categoryVoteMergeKey(vote);
+    if (seen.has(key)) continue;
+    merged.push(vote);
+    seen.add(key);
+  }
+  return merged;
 }
 
 function roomMemberKey(member: RoomMember): string {
@@ -456,7 +473,7 @@ export function FoodMatchApp() {
     const focusIds =
       restaurantFocusCategoryIds.length > 0
         ? restaurantFocusCategoryIds
-        : memberCount === 1
+        : memberCount <= 1
           ? soloLikedCategoryIds
           : [];
 
@@ -480,7 +497,7 @@ export function FoodMatchApp() {
     const primary = visibleCityRestaurants
       .filter((restaurant) =>
         focusIds.length === 0
-          ? memberCount === 1 &&
+          ? memberCount <= 1 &&
             restaurant.categoryIds.some((categoryId) => soloLikedCategoryIds.includes(categoryId))
           : restaurant.categoryIds.some((categoryId) => focusIds.includes(categoryId)),
       )
@@ -1153,13 +1170,15 @@ export function FoodMatchApp() {
           if (!active) return;
 
           const rows = (legacy.data as Omit<RoomCategoryVote, "user_id">[] | null) ?? [];
-          setCategoryVotes(rows.map((row) => ({ ...row, user_id: null })));
+          const normalized = rows.map((row) => ({ ...row, user_id: null as string | null }));
+          setCategoryVotes((prev) => mergeCategoryVotesFromServer(normalized, prev));
         }
 
         return;
       }
 
-      setCategoryVotes(((primary.data as RoomCategoryVote[] | null) ?? []).filter(Boolean));
+      const rows = ((primary.data as RoomCategoryVote[] | null) ?? []).filter(Boolean);
+      setCategoryVotes((prev) => mergeCategoryVotesFromServer(rows, prev));
     }
 
     async function loadRestaurantVotes() {
@@ -1194,6 +1213,15 @@ export function FoodMatchApp() {
     void loadCategoryVotes();
     void loadRestaurantVotes();
 
+    let categoryReloadTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleCategoryVotesReload = () => {
+      if (categoryReloadTimer) clearTimeout(categoryReloadTimer);
+      categoryReloadTimer = setTimeout(() => {
+        categoryReloadTimer = null;
+        void loadCategoryVotes();
+      }, 320);
+    };
+
     const categoryChannel = supabase
       .channel(`room-category-votes-${roomId}`)
       .on(
@@ -1205,7 +1233,7 @@ export function FoodMatchApp() {
           filter: `room_id=eq.${roomId}`,
         },
         () => {
-          void loadCategoryVotes();
+          scheduleCategoryVotesReload();
         },
       )
       .subscribe();
@@ -1228,6 +1256,7 @@ export function FoodMatchApp() {
 
     return () => {
       active = false;
+      if (categoryReloadTimer) clearTimeout(categoryReloadTimer);
       void supabase.removeChannel(categoryChannel);
       void supabase.removeChannel(restaurantChannel);
     };
@@ -1287,7 +1316,7 @@ export function FoodMatchApp() {
     const focusIds =
       restaurantFocusCategoryIds.length > 0
         ? restaurantFocusCategoryIds
-        : memberCount === 1
+        : memberCount <= 1
           ? soloLikedCategoryIds
           : [];
 
@@ -1316,7 +1345,6 @@ export function FoodMatchApp() {
 
         if (!response.ok) {
           setMessage(payload.error ?? "Could not load restaurants for this city.");
-          setCityRestaurants([]);
           return;
         }
 
@@ -1324,7 +1352,6 @@ export function FoodMatchApp() {
       } catch (error) {
         if (!active || controller.signal.aborted) return;
         setMessage(getErrorMessage(error, "Could not load restaurants."));
-        setCityRestaurants([]);
       } finally {
         if (active) {
           setRestaurantsLoading(false);
@@ -1338,8 +1365,8 @@ export function FoodMatchApp() {
       active = false;
       controller.abort();
     };
-    // `diningPlacesFetchKey` intentionally encodes roomStage + liked category ids for fetch timing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid refetching on every category swipe while still in "categories"
+    // `diningPlacesFetchKey` encodes roomStage + category focus for fetch timing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoom, diningPlacesFetchKey]);
 
   if (loading) {
@@ -1924,6 +1951,19 @@ function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
   );
 }
 
+const CategorySwipeCard = memo(function CategorySwipeCardInner({ category }: { category: Category }) {
+  return (
+    <div className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}>
+      <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
+        <div className="text-6xl">{category.emoji}</div>
+        <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
+        <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
+        <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
+      </div>
+    </div>
+  );
+});
+
 function roomStageFlowLabel(stage: RoomStage) {
   switch (stage) {
     case "waiting_categories":
@@ -1994,6 +2034,8 @@ function RoomScreen({
       setEnterSwipe(false);
     }, 520);
   };
+
+  const renderCategoryCard = useCallback((category: Category) => <CategorySwipeCard category={category} />, []);
 
   const showLobbyChrome = stage === "lobby" && !enterSwipe;
   const showStartTransition = stage === "lobby" && enterSwipe;
@@ -2084,20 +2126,9 @@ function RoomScreen({
                 nextItem={nextCategory}
                 likeLabel="Like"
                 skipLabel="Pass"
-                onLike={() => onCategoryDecision(currentCategory.id, "like")}
-                onSkip={() => onCategoryDecision(currentCategory.id, "skip")}
-                renderCard={(category) => (
-                  <div
-                    className={`min-h-[320px] rounded-[32px] bg-gradient-to-br ${category.accent} p-[1px] ${category.textures}`}
-                  >
-                    <div className="flex h-full flex-col rounded-[31px] bg-[#17131b]/96 p-6">
-                      <div className="text-6xl">{category.emoji}</div>
-                      <p className="mt-6 text-xs uppercase tracking-[0.28em] text-white/45">Food style</p>
-                      <h3 className="mt-3 text-4xl font-semibold text-white">{category.title}</h3>
-                      <p className="mt-4 text-base leading-7 text-white/65">{category.blurb}</p>
-                    </div>
-                  </div>
-                )}
+                onLike={(cat) => onCategoryDecision(cat.id, "like")}
+                onSkip={(cat) => onCategoryDecision(cat.id, "skip")}
+                renderCard={renderCategoryCard}
               />
             ) : (
               <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl bg-white/6 p-4 text-center text-sm text-white/55">
@@ -2142,8 +2173,8 @@ function RoomScreen({
                 nextItem={nextRestaurant}
                 likeLabel="Like"
                 skipLabel="Pass"
-                onLike={() => onRestaurantDecision(currentRestaurant.id, "like")}
-                onSkip={() => onRestaurantDecision(currentRestaurant.id, "skip")}
+                onLike={(place) => onRestaurantDecision(place.id, "like")}
+                onSkip={(place) => onRestaurantDecision(place.id, "skip")}
                 renderCard={(restaurant) => <RestaurantSwipeCard restaurant={restaurant} />}
               />
             ) : (
@@ -2341,29 +2372,33 @@ function SwipePanel<T>({
   nextItem: T | null;
   likeLabel: string;
   skipLabel: string;
-  onLike: () => void;
-  onSkip: () => void;
+  onLike: (item: T) => void;
+  onSkip: (item: T) => void;
   renderCard: (item: T) => React.ReactNode;
   fillHeight?: boolean;
 }) {
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
   const startXRef = useRef(0);
+  const gestureItemRef = useRef<T | null>(null);
 
   const reset = useCallback(() => {
+    gestureItemRef.current = null;
     setDragX(0);
     setDragging(false);
   }, []);
 
   const commit = useCallback(
     (direction: "like" | "skip") => {
+      const target = gestureItemRef.current;
+      if (!target) return;
       setDragX(direction === "like" ? 420 : -420);
       window.setTimeout(() => {
         reset();
         if (direction === "like") {
-          onLike();
+          onLike(target);
         } else {
-          onSkip();
+          onSkip(target);
         }
       }, 140);
     },
@@ -2389,6 +2424,7 @@ function SwipePanel<T>({
 
         <div
           onPointerDown={(event) => {
+            gestureItemRef.current = item;
             startXRef.current = event.clientX;
             setDragging(true);
           }}
@@ -2524,7 +2560,7 @@ function getSharedLikedIds<T extends { user_id: string | null; decision: "like" 
     return shared;
   }
 
-  if (memberCount === 1) {
+  if (memberCount <= 1) {
     return fallbackVotes
       .filter((vote) => vote.decision === "like")
       .map((vote) => (vote as T & Record<string, string>)[itemKey]);
