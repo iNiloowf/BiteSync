@@ -1,902 +1,717 @@
 "use client";
 
-import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Session, User } from "@supabase/supabase-js";
 
-import {
-  categories,
-  countries,
-  participants,
-  type Category,
-  type Restaurant,
-} from "@/data/mock-data";
-import { hasSupabaseEnv } from "@/lib/supabase";
+import { countries } from "@/data/mock-data";
+import { getSupabaseBrowserClient, hasSupabaseEnv } from "@/lib/supabase";
 
-type Step = "intro" | "profile" | "room" | "share" | "categories" | "restaurants" | "summary";
-type Role = "host" | "guest";
-type SwipeDecision = "like" | "skip";
+type Screen = "auth" | "home" | "profile" | "room";
+type AuthMode = "signin" | "signup";
+type RoomMode = "host" | "join";
 
-type StoredProfile = {
-  name: string;
-  countryCode: string;
+type Profile = {
+  id: string;
+  full_name: string;
+  country_code: string;
+  city: string;
+  avatar_url: string | null;
+};
+
+type RoomRecord = {
+  id: string;
+  code: string;
+  host_name: string;
+  country_code: string;
   city: string;
 };
 
-type MenuState = {
-  restaurantName: string;
-  title: string;
-  image: string;
-  price: string;
+type UntypedQueryResult<T> = Promise<{ data: T; error?: { message?: string } | null }>;
+
+type ProfilesTable = {
+  select: (query?: string) => {
+    eq: (column: string, value: string) => {
+      maybeSingle: () => UntypedQueryResult<Profile | null>;
+    };
+  };
+  upsert: (value: unknown) => {
+    select: () => {
+      single: () => UntypedQueryResult<Profile>;
+    };
+  };
 };
 
-type SwipeableRestaurant = Restaurant & {
-  overlap: string[];
-  matchScore: number;
+type RoomsTable = {
+  select: (query?: string) => {
+    eq: (column: string, value: string) => {
+      maybeSingle: () => UntypedQueryResult<RoomRecord | null>;
+    };
+  };
+  insert: (value: unknown) => {
+    select: () => {
+      single: () => UntypedQueryResult<RoomRecord>;
+    };
+  };
+};
+
+type MembersTable = {
+  insert: (value: unknown) => unknown;
+  upsert: (value: unknown) => unknown;
 };
 
 export function FoodMatchApp() {
-  const [step, setStep] = useState<Step>("intro");
-  const [role, setRole] = useState<Role>("host");
-  const [name, setName] = useState("Mia");
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [screen, setScreen] = useState<Screen>(hasSupabaseEnv ? "auth" : "home");
+  const [authMode, setAuthMode] = useState<AuthMode>("signup");
+  const [loading, setLoading] = useState(hasSupabaseEnv);
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [roomMode, setRoomMode] = useState<RoomMode>("host");
+  const [activeRoom, setActiveRoom] = useState<RoomRecord | null>(null);
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
   const [countryCode, setCountryCode] = useState("US");
   const [city, setCity] = useState("Denver");
-  const [hasSavedProfile, setHasSavedProfile] = useState(false);
-  const [roomCode, setRoomCode] = useState("BITE-204");
-  const [qrCodeUrl, setQrCodeUrl] = useState("");
-  const [categoryIndex, setCategoryIndex] = useState(0);
-  const [restaurantIndex, setRestaurantIndex] = useState(0);
-  const [categoryDragX, setCategoryDragX] = useState(0);
-  const [restaurantDragX, setRestaurantDragX] = useState(0);
-  const [likedCategories, setLikedCategories] = useState<string[]>([]);
-  const [likedRestaurants, setLikedRestaurants] = useState<string[]>([]);
-  const [menuModal, setMenuModal] = useState<MenuState | null>(null);
-  const categoryDragStartRef = useRef<number | null>(null);
-  const restaurantDragStartRef = useRef<number | null>(null);
+  const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [avatarUploading, setAvatarUploading] = useState(false);
 
-  const countrySeed = useMemo(
-    () => countries.find((country) => country.code === countryCode) ?? countries[1],
-    [countryCode],
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const getProfilesTable = useCallback(
+    () => supabase?.from("profiles") as unknown as ProfilesTable,
+    [supabase],
   );
 
-  const currentCategory = categories[categoryIndex] ?? categories[categories.length - 1];
+  const getRoomsTable = useCallback(
+    () => supabase?.from("rooms") as unknown as RoomsTable,
+    [supabase],
+  );
 
-  const joinLink = useMemo(
-    () =>
-      `https://bitesync.app/join?room=${encodeURIComponent(roomCode)}&city=${encodeURIComponent(
-        city,
-      )}`,
-    [city, roomCode],
+  const getMembersTable = useCallback(
+    () => supabase?.from("room_members") as unknown as MembersTable,
+    [supabase],
+  );
+
+  const loadProfile = useCallback(
+    async (user: User) => {
+      if (!supabase) return;
+
+      const profilesQuery = getProfilesTable();
+
+      const { data } = await profilesQuery.select("*").eq("id", user.id).maybeSingle();
+
+      if (data) {
+        setProfile(data);
+        setFullName(data.full_name);
+        setCountryCode(data.country_code || "US");
+        setCity(data.city || "Denver");
+        return;
+      }
+
+      const fallbackProfile: Profile = {
+        id: user.id,
+        full_name: user.user_metadata.full_name ?? user.email?.split("@")[0] ?? "BiteSync User",
+        country_code: "US",
+        city: "Denver",
+        avatar_url: null,
+      };
+
+      const { data: inserted } = await profilesQuery.upsert(fallbackProfile).select().single();
+
+      setProfile(inserted ?? fallbackProfile);
+      setFullName((inserted ?? fallbackProfile).full_name);
+      setCountryCode((inserted ?? fallbackProfile).country_code);
+      setCity((inserted ?? fallbackProfile).city);
+    },
+    [getProfilesTable, supabase],
   );
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!supabase) return;
 
-    const savedProfileRaw = window.localStorage.getItem("bitesync-profile");
-    if (!savedProfileRaw) return;
+    let mounted = true;
 
-    let frameId = 0;
-
-    try {
-      const savedProfile = JSON.parse(savedProfileRaw) as StoredProfile;
-      if (savedProfile.name && savedProfile.countryCode && savedProfile.city) {
-        frameId = window.requestAnimationFrame(() => {
-          setName(savedProfile.name);
-          setCountryCode(savedProfile.countryCode);
-          setCity(savedProfile.city);
-          setHasSavedProfile(true);
-        });
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!mounted) return;
+      const nextSession = data.session;
+      setSession(nextSession);
+      if (nextSession?.user) {
+        await loadProfile(nextSession.user);
+        setScreen("home");
+      } else {
+        setScreen("auth");
       }
-    } catch {
-      window.localStorage.removeItem("bitesync-profile");
-    }
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (nextSession?.user) {
+        void loadProfile(nextSession.user);
+        setScreen("home");
+      } else {
+        setProfile(null);
+        setScreen("auth");
+      }
+    });
 
     return () => {
-      if (frameId) {
-        window.cancelAnimationFrame(frameId);
-      }
+      mounted = false;
+      subscription.unsubscribe();
     };
+  }, [loadProfile, supabase]);
+
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  useEffect(() => {
-    let active = true;
+  async function handleAuthSubmit() {
+    if (!supabase) return;
+    setSubmitting(true);
+    setMessage("");
 
-    import("qrcode")
-      .then((mod) =>
-        mod.default.toDataURL(joinLink, {
-          margin: 1,
-          width: 220,
-          color: { dark: "#131112", light: "#fff7ed" },
-        }),
-      )
-      .then((url) => {
-        if (active) {
-          setQrCodeUrl(url);
+    try {
+      if (authMode === "signup") {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              full_name: fullName,
+            },
+          },
+        });
+
+        if (error) throw error;
+
+        if (data.user) {
+          await getProfilesTable().upsert({
+            id: data.user.id,
+            full_name: fullName,
+            country_code: countryCode,
+            city,
+            avatar_url: null,
+          });
+          setMessage("Your account was created. You can start using BiteSync now.");
         }
-      })
-      .catch(() => {
-        if (active) {
-          setQrCodeUrl("");
-        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Something went wrong.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSignOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setMenuOpen(false);
+    setActiveRoom(null);
+  }
+
+  async function handleSaveProfile() {
+    if (!supabase || !session?.user) return;
+    setSubmitting(true);
+    setMessage("");
+
+    try {
+      const payload = {
+        id: session.user.id,
+        full_name: fullName,
+        country_code: countryCode,
+        city,
+        avatar_url: profile?.avatar_url ?? null,
+      };
+
+      const { data, error } = await getProfilesTable().upsert(payload).select().single();
+      if (error) throw error;
+
+      setProfile(data as Profile);
+      setScreen("home");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save your profile.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleAvatarUpload(file: File) {
+    if (!supabase || !session?.user) return;
+    setAvatarUploading(true);
+    setMessage("");
+
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `${session.user.id}/avatar.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(path, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+
+      const { data: updated, error: profileError } = await getProfilesTable()
+        .upsert({
+          id: session.user.id,
+          full_name: fullName,
+          country_code: countryCode,
+          city,
+          avatar_url: data.publicUrl,
+        })
+        .select()
+        .single();
+
+      if (profileError) throw profileError;
+      setProfile(updated as Profile);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Avatar upload failed.");
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
+
+  async function handleHostRoom() {
+    if (!supabase || !profile) return;
+    setSubmitting(true);
+    setMessage("");
+
+    try {
+      const code = createRoomCode(profile.city);
+      const { data: roomData, error: roomError } = await getRoomsTable()
+        .insert({
+          code,
+          host_name: profile.full_name,
+          country_code: profile.country_code,
+          city: profile.city,
+        })
+        .select()
+        .single();
+
+      if (roomError) throw roomError;
+
+      await getMembersTable().insert({
+        room_id: roomData.id,
+        user_id: session?.user.id,
+        name: profile.full_name,
       });
 
-    return () => {
-      active = false;
-    };
-  }, [joinLink]);
-
-  const restaurantPool = useMemo<SwipeableRestaurant[]>(() => {
-    return countrySeed.restaurants
-      .map((restaurant) => {
-        const overlap = restaurant.categoryIds.filter((id) => likedCategories.includes(id));
-        return {
-          ...restaurant,
-          overlap,
-          matchScore: overlap.length * 36 + restaurant.rating * 10,
-        };
-      })
-      .sort((a, b) => b.matchScore - a.matchScore);
-  }, [countrySeed.restaurants, likedCategories]);
-
-  const currentRestaurant =
-    restaurantPool[restaurantIndex] ?? restaurantPool[restaurantPool.length - 1];
-
-  const shortlistedRestaurants = useMemo(() => {
-    const liked = restaurantPool.filter((restaurant) => likedRestaurants.includes(restaurant.id));
-    return liked.length > 0 ? liked : restaurantPool.slice(0, 3);
-  }, [likedRestaurants, restaurantPool]);
-
-  const progress = useMemo(() => {
-    const order: Step[] = [
-      "intro",
-      "profile",
-      "room",
-      "share",
-      "categories",
-      "restaurants",
-      "summary",
-    ];
-    return ((order.indexOf(step) + 1) / order.length) * 100;
-  }, [step]);
-
-  function handleCountryChange(code: string) {
-    const nextCountry = countries.find((country) => country.code === code);
-    setCountryCode(code);
-    if (nextCountry) {
-      setCity(nextCountry.city);
+      setActiveRoom(roomData as RoomRecord);
+      setRoomMode("host");
+      setScreen("room");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create room.");
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  function moveToRoom() {
-    setRoomCode(
-      `${city.slice(0, 4).toUpperCase() || "BITE"}-${countryCode}${String(
-        participants.length + 21,
-      ).padStart(2, "0")}`,
+  async function handleJoinRoom() {
+    if (!supabase || !profile) return;
+    setSubmitting(true);
+    setMessage("");
+
+    try {
+      const code = roomCodeInput.trim().toUpperCase();
+      const { data: roomData, error: roomError } = await getRoomsTable()
+        .select("*")
+        .eq("code", code)
+        .maybeSingle();
+
+      if (roomError) throw roomError;
+      if (!roomData) throw new Error("Room not found.");
+
+      await getMembersTable().upsert({
+        room_id: roomData.id,
+        user_id: session?.user.id,
+        name: profile.full_name,
+      });
+
+      setActiveRoom(roomData as RoomRecord);
+      setRoomMode("join");
+      setScreen("room");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not join room.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <main className="grid h-[100dvh] place-items-center overflow-hidden bg-[#0f0c12] text-white">
+        <div className="text-center">
+          <p className="text-sm uppercase tracking-[0.28em] text-white/45">BiteSync</p>
+          <h1 className="mt-4 text-4xl font-semibold">Loading...</h1>
+        </div>
+      </main>
     );
-    setStep("room");
-  }
-
-  function saveProfileAndContinue() {
-    if (typeof window !== "undefined") {
-      const profile: StoredProfile = { name, countryCode, city };
-      window.localStorage.setItem("bitesync-profile", JSON.stringify(profile));
-    }
-    setHasSavedProfile(true);
-    moveToRoom();
-  }
-
-  function registerCategoryDecision(categoryId: string, decision: SwipeDecision) {
-    if (decision === "like") {
-      setLikedCategories((prev) => Array.from(new Set([...prev, categoryId])));
-    } else {
-      setLikedCategories((prev) => prev.filter((item) => item !== categoryId));
-    }
-
-    setCategoryDragX(0);
-    if (categoryIndex >= categories.length - 1) {
-      setRestaurantIndex(0);
-      setStep("restaurants");
-      return;
-    }
-
-    setCategoryIndex((prev) => prev + 1);
-  }
-
-  function registerRestaurantDecision(restaurantId: string, decision: SwipeDecision) {
-    if (decision === "like") {
-      setLikedRestaurants((prev) => Array.from(new Set([...prev, restaurantId])));
-    } else {
-      setLikedRestaurants((prev) => prev.filter((item) => item !== restaurantId));
-    }
-
-    setRestaurantDragX(0);
-    if (restaurantIndex >= restaurantPool.length - 1) {
-      setStep("summary");
-      return;
-    }
-
-    setRestaurantIndex((prev) => prev + 1);
-  }
-
-  function handleCategoryPointerDown(clientX: number) {
-    categoryDragStartRef.current = clientX;
-  }
-
-  function handleCategoryPointerMove(clientX: number) {
-    if (categoryDragStartRef.current === null) return;
-    setCategoryDragX(clientX - categoryDragStartRef.current);
-  }
-
-  function handleCategoryPointerUp() {
-    if (categoryDragStartRef.current === null) return;
-    if (categoryDragX > 110) registerCategoryDecision(currentCategory.id, "like");
-    else if (categoryDragX < -110) registerCategoryDecision(currentCategory.id, "skip");
-    else setCategoryDragX(0);
-    categoryDragStartRef.current = null;
-  }
-
-  function handleRestaurantPointerDown(clientX: number) {
-    restaurantDragStartRef.current = clientX;
-  }
-
-  function handleRestaurantPointerMove(clientX: number) {
-    if (restaurantDragStartRef.current === null) return;
-    setRestaurantDragX(clientX - restaurantDragStartRef.current);
-  }
-
-  function handleRestaurantPointerUp() {
-    if (restaurantDragStartRef.current === null) return;
-    if (restaurantDragX > 110) registerRestaurantDecision(currentRestaurant.id, "like");
-    else if (restaurantDragX < -110) registerRestaurantDecision(currentRestaurant.id, "skip");
-    else setRestaurantDragX(0);
-    restaurantDragStartRef.current = null;
-  }
-
-  function resetAll() {
-    setStep("intro");
-    setCategoryIndex(0);
-    setRestaurantIndex(0);
-    setCategoryDragX(0);
-    setRestaurantDragX(0);
-    setLikedCategories([]);
-    setLikedRestaurants([]);
-    setMenuModal(null);
   }
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[#120f14] text-white">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-20 top-0 h-72 w-72 rounded-full bg-fuchsia-500/20 blur-3xl" />
-        <div className="absolute right-0 top-20 h-80 w-80 rounded-full bg-orange-400/20 blur-3xl" />
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-cyan-400/15 blur-3xl" />
-      </div>
+    <main className="h-[100dvh] overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,120,68,0.14),_transparent_22%),radial-gradient(circle_at_bottom_right,_rgba(111,66,193,0.12),_transparent_24%),#0f0c12] text-white">
+      <div className="mx-auto flex h-full w-full max-w-[460px] flex-col px-3 py-3 sm:px-4 sm:py-4">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#141117]/92 shadow-[0_24px_100px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <AppHeader
+            profile={profile}
+            screen={screen}
+            menuOpen={menuOpen}
+            menuRef={menuRef}
+            onToggleMenu={() => setMenuOpen((prev) => !prev)}
+            onOpenProfile={() => {
+              setMenuOpen(false);
+              setScreen("profile");
+            }}
+            onSignOut={handleSignOut}
+          />
 
-      <div className="relative mx-auto flex h-full w-full max-w-[560px] px-2 py-2 sm:px-4 sm:py-4">
-        <div className="flex h-full w-full flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#0f0d11]/88 shadow-[0_40px_140px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:rounded-[32px]">
-          <div className="flex items-center justify-between px-4 pt-4 text-xs font-semibold uppercase tracking-[0.24em] text-white/45 sm:px-5">
-            <span>BiteSync</span>
-            <span>{Math.round(progress)}%</span>
-          </div>
           {!hasSupabaseEnv ? (
-            <div className="px-4 pt-3 sm:px-5">
-              <div className="rounded-full border border-amber-400/20 bg-amber-400/10 px-4 py-2 text-[11px] font-medium text-amber-100">
-                Real shared rooms need Supabase env keys in Vercel.
+            <div className="px-4 pt-3">
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                Add your Supabase keys to Vercel first to enable real sign up, profile saving, and shared rooms.
               </div>
             </div>
           ) : null}
-          <div className="px-4 pt-3 sm:px-5">
-            <div className="h-1.5 rounded-full bg-white/8">
-              <div
-                className="h-1.5 rounded-full bg-gradient-to-r from-orange-400 via-pink-500 to-cyan-400 transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
+
+          {message ? (
+            <div className="px-4 pt-3">
+              <div className="rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-sm text-white/80">
+                {message}
+              </div>
             </div>
-          </div>
+          ) : null}
 
-          <div className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-              {step === "intro" ? (
-                <IntroScreen
-                  hasSavedProfile={hasSavedProfile}
-                  name={name}
-                  city={city}
-                  onEditProfile={() => setStep("profile")}
-                  onHost={() => {
-                    setRole("host");
-                    setStep(hasSavedProfile ? "room" : "profile");
-                  }}
-                  onGuest={() => {
-                    setRole("guest");
-                    setStep(hasSavedProfile ? "room" : "profile");
-                  }}
-                />
-              ) : null}
+          <div className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-4">
+            {screen === "auth" ? (
+              <AuthScreen
+                mode={authMode}
+                email={email}
+                password={password}
+                fullName={fullName}
+                countryCode={countryCode}
+                city={city}
+                submitting={submitting}
+                onModeChange={setAuthMode}
+                onEmailChange={setEmail}
+                onPasswordChange={setPassword}
+                onFullNameChange={setFullName}
+                onCountryChange={setCountryCode}
+                onCityChange={setCity}
+                onSubmit={handleAuthSubmit}
+              />
+            ) : null}
 
-              {step === "profile" ? (
-                <ProfileScreen
-                  role={role}
-                  name={name}
-                  countryCode={countryCode}
-                  city={city}
-                  onBack={() => setStep("intro")}
-                  onNameChange={setName}
-                  onCountryChange={handleCountryChange}
-                  onCityChange={setCity}
-                  onContinue={saveProfileAndContinue}
-                />
-              ) : null}
+            {screen === "home" ? (
+              <HomeScreen
+                profile={profile}
+                roomCodeInput={roomCodeInput}
+                submitting={submitting}
+                onRoomCodeChange={setRoomCodeInput}
+                onHost={handleHostRoom}
+                onJoin={handleJoinRoom}
+              />
+            ) : null}
 
-              {step === "room" ? (
-                <RoomScreen
-                  role={role}
-                  roomCode={roomCode}
-                  onBack={() => setStep("profile")}
-                  onRoomCodeChange={setRoomCode}
-                  onContinue={() => setStep("share")}
-                />
-              ) : null}
+            {screen === "profile" ? (
+              <ProfileScreen
+                profile={profile}
+                fullName={fullName}
+                countryCode={countryCode}
+                city={city}
+                submitting={submitting}
+                avatarUploading={avatarUploading}
+                fileInputRef={fileInputRef}
+                onBack={() => setScreen("home")}
+                onFullNameChange={setFullName}
+                onCountryChange={setCountryCode}
+                onCityChange={setCity}
+                onPickAvatar={() => fileInputRef.current?.click()}
+                onFileChange={(file) => file && handleAvatarUpload(file)}
+                onSave={handleSaveProfile}
+              />
+            ) : null}
 
-              {step === "share" ? (
-                <ShareScreen
-                  name={name}
-                  city={city}
-                  roomCode={roomCode}
-                  joinLink={joinLink}
-                  qrCodeUrl={qrCodeUrl}
-                  onBack={() => setStep("room")}
-                  onContinue={() => setStep("categories")}
-                />
-              ) : null}
-
-              {step === "categories" ? (
-                <CategorySwipeScreen
-                  currentCategory={currentCategory}
-                  nextCategory={categories[categoryIndex + 1]}
-                  index={categoryIndex}
-                  total={categories.length}
-                  dragX={categoryDragX}
-                  likedCategories={likedCategories}
-                  onBack={() => setStep("share")}
-                  onPointerDown={handleCategoryPointerDown}
-                  onPointerMove={handleCategoryPointerMove}
-                  onPointerUp={handleCategoryPointerUp}
-                />
-              ) : null}
-
-              {step === "restaurants" ? (
-                <RestaurantSwipeScreen
-                  city={city}
-                  currentRestaurant={currentRestaurant}
-                  nextRestaurant={restaurantPool[restaurantIndex + 1]}
-                  dragX={restaurantDragX}
-                  index={restaurantIndex}
-                  total={restaurantPool.length}
-                  likedCategories={likedCategories}
-                  onBack={() => setStep("categories")}
-                  onPointerDown={handleRestaurantPointerDown}
-                  onPointerMove={handleRestaurantPointerMove}
-                  onPointerUp={handleRestaurantPointerUp}
-                />
-              ) : null}
-
-              {step === "summary" ? (
-                <SummaryScreen
-                  city={city}
-                  likedCategories={likedCategories}
-                  shortlistedRestaurants={shortlistedRestaurants}
-                  onRestart={resetAll}
-                  onBack={() => setStep("restaurants")}
-                  onOpenMenu={(restaurant, item) =>
-                    setMenuModal({
-                      restaurantName: restaurant.name,
-                      title: item.title,
-                      image: item.image,
-                      price: item.price,
-                    })
-                  }
-                />
-              ) : null}
+            {screen === "room" ? (
+              <RoomScreen
+                profile={profile}
+                room={activeRoom}
+                mode={roomMode}
+                onBack={() => setScreen("home")}
+              />
+            ) : null}
           </div>
         </div>
       </div>
-      {menuModal ? <MenuModal state={menuModal} onClose={() => setMenuModal(null)} /> : null}
     </main>
   );
 }
 
-function IntroScreen({
-  hasSavedProfile,
-  name,
-  city,
-  onEditProfile,
-  onHost,
-  onGuest,
+function AppHeader({
+  profile,
+  screen,
+  menuOpen,
+  menuRef,
+  onToggleMenu,
+  onOpenProfile,
+  onSignOut,
 }: {
-  hasSavedProfile: boolean;
-  name: string;
+  profile: Profile | null;
+  screen: Screen;
+  menuOpen: boolean;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  onToggleMenu: () => void;
+  onOpenProfile: () => void;
+  onSignOut: () => void;
+}) {
+  const subtitle =
+    screen === "auth"
+      ? "Real account"
+      : screen === "profile"
+        ? "Your profile"
+        : screen === "room"
+          ? "Room ready"
+          : "Choose a path";
+
+  return (
+    <div className="flex items-center justify-between border-b border-white/8 px-4 py-4">
+      <div>
+        <p className="text-xs uppercase tracking-[0.26em] text-white/38">BiteSync</p>
+        <p className="mt-1 text-sm text-white/68">{subtitle}</p>
+      </div>
+
+      {profile ? (
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={onToggleMenu}
+            className="h-11 w-11 overflow-hidden rounded-full border border-white/12 bg-white/10"
+          >
+            {profile.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={profile.avatar_url} alt={profile.full_name} className="h-full w-full object-cover" />
+            ) : (
+              <div className="grid h-full w-full place-items-center text-sm font-semibold text-white">
+                {getInitials(profile.full_name)}
+              </div>
+            )}
+          </button>
+
+          {menuOpen ? (
+            <div className="absolute right-0 top-14 z-20 w-44 rounded-2xl border border-white/10 bg-[#1b1720] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
+              <button onClick={onOpenProfile} className={menuItemClass}>
+                Profile
+              </button>
+              <button onClick={onSignOut} className={menuItemClass}>
+                Sign out
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AuthScreen({
+  mode,
+  email,
+  password,
+  fullName,
+  countryCode,
+  city,
+  submitting,
+  onModeChange,
+  onEmailChange,
+  onPasswordChange,
+  onFullNameChange,
+  onCountryChange,
+  onCityChange,
+  onSubmit,
+}: {
+  mode: AuthMode;
+  email: string;
+  password: string;
+  fullName: string;
+  countryCode: string;
   city: string;
-  onEditProfile: () => void;
-  onHost: () => void;
-  onGuest: () => void;
+  submitting: boolean;
+  onModeChange: (value: AuthMode) => void;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onFullNameChange: (value: string) => void;
+  onCountryChange: (value: string) => void;
+  onCityChange: (value: string) => void;
+  onSubmit: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col justify-between gap-5 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col justify-between gap-5 overflow-hidden">
       <div>
-        <div className="inline-flex rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/75">
-          BiteSync
+        <div className="inline-flex rounded-full border border-white/10 bg-white/6 p-1">
+          <button
+            onClick={() => onModeChange("signup")}
+            className={`rounded-full px-4 py-2 text-sm font-semibold ${mode === "signup" ? "bg-white text-stone-950" : "text-white/65"}`}
+          >
+            Sign up
+          </button>
+          <button
+            onClick={() => onModeChange("signin")}
+            className={`rounded-full px-4 py-2 text-sm font-semibold ${mode === "signin" ? "bg-white text-stone-950" : "text-white/65"}`}
+          >
+            Sign in
+          </button>
         </div>
-        <h1 className="mt-5 text-4xl font-semibold leading-[0.94] text-white sm:text-5xl">
-          Dinner picks.
-          <br />
-          Zero group drama.
+
+        <h1 className="mt-5 text-4xl font-semibold leading-tight text-white">
+          {mode === "signup" ? "Create your BiteSync account." : "Welcome back."}
         </h1>
-        <p className="mt-4 text-sm leading-7 text-white/62 sm:text-base">
-          Save your profile once, host a room, let everyone join with a QR, then swipe food styles and restaurants like Tinder.
+        <p className="mt-3 text-sm leading-7 text-white/58">
+          {mode === "signup"
+            ? "Sign up once, then every time you open the app you can go straight to Host or Join."
+            : "Sign in to jump back into your rooms and keep your profile."}
         </p>
       </div>
 
-      <div className="space-y-3">
-        {hasSavedProfile ? (
-          <div className="rounded-[28px] border border-white/10 bg-white/6 p-5">
-            <p className="text-sm text-white/55">Signed in as</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{name}</p>
-            <p className="mt-2 text-sm text-white/55">{city}</p>
-            <button onClick={onEditProfile} className="mt-4 text-sm font-semibold text-orange-300">
-              Edit saved profile
-            </button>
-          </div>
-        ) : (
-          <button onClick={onEditProfile} className="w-full rounded-[28px] border border-white/10 bg-white/6 px-5 py-5 text-left">
-            <p className="text-sm text-white/55">First time here?</p>
-            <p className="mt-1 text-2xl font-semibold text-white">Create your simple login</p>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="space-y-4 pb-2">
+          {mode === "signup" ? (
+            <>
+              <Field label="Full name">
+                <input value={fullName} onChange={(event) => onFullNameChange(event.target.value)} className={fieldClass} placeholder="Your name" />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Country">
+                  <select value={countryCode} onChange={(event) => onCountryChange(event.target.value)} className={fieldClass}>
+                    {countries.map((country) => (
+                      <option key={country.code} value={country.code}>
+                        {country.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="City">
+                  <input value={city} onChange={(event) => onCityChange(event.target.value)} className={fieldClass} placeholder="City" />
+                </Field>
+              </div>
+            </>
+          ) : null}
+
+          <Field label="Email">
+            <input value={email} onChange={(event) => onEmailChange(event.target.value)} className={fieldClass} placeholder="you@example.com" type="email" />
+          </Field>
+          <Field label="Password">
+            <input value={password} onChange={(event) => onPasswordChange(event.target.value)} className={fieldClass} placeholder="Password" type="password" />
+          </Field>
+        </div>
+      </div>
+
+      <button onClick={onSubmit} disabled={submitting} className={primaryButtonClass}>
+        {submitting ? "Please wait..." : mode === "signup" ? "Create account" : "Sign in"}
+      </button>
+    </div>
+  );
+}
+
+function HomeScreen({
+  profile,
+  roomCodeInput,
+  submitting,
+  onRoomCodeChange,
+  onHost,
+  onJoin,
+}: {
+  profile: Profile | null;
+  roomCodeInput: string;
+  submitting: boolean;
+  onRoomCodeChange: (value: string) => void;
+  onHost: () => void;
+  onJoin: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
+      <div className="rounded-[28px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_52%,#8f6bff_100%)] p-[1px]">
+        <div className="rounded-[27px] bg-[#161218] p-5">
+          <p className="text-sm text-white/55">Signed in as</p>
+          <h1 className="mt-2 text-3xl font-semibold text-white">{profile?.full_name}</h1>
+          <p className="mt-2 text-sm text-white/58">
+            {profile?.city}, {profile?.country_code}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3">
+        <button onClick={onHost} disabled={submitting} className={primaryCardClass}>
+          <p className="text-sm text-white/68">Start a fresh decision room</p>
+          <p className="mt-1 text-2xl font-semibold">Host a room</p>
+        </button>
+
+        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+          <p className="text-sm text-white/58">Already have a room code?</p>
+          <input
+            value={roomCodeInput}
+            onChange={(event) => onRoomCodeChange(event.target.value.toUpperCase())}
+            className={`${fieldClass} mt-4 text-center text-2xl font-semibold tracking-[0.24em]`}
+            placeholder="BSYN-204"
+          />
+          <button onClick={onJoin} disabled={submitting} className="mt-4 w-full rounded-full bg-white px-5 py-4 font-semibold text-stone-950">
+            Join room
           </button>
-        )}
-        <button
-          onClick={onHost}
-          className="w-full rounded-[28px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_52%,#8f6bff_100%)] px-5 py-5 text-left shadow-[0_20px_70px_rgba(255,101,101,0.35)]"
-        >
-          <p className="text-sm text-white/72">{hasSavedProfile ? "Use your saved profile" : "Set up and create a room"}</p>
-          <p className="mt-1 text-2xl font-semibold">Continue as host</p>
-        </button>
-        <button
-          onClick={onGuest}
-          className="w-full rounded-[28px] border border-white/10 bg-white/6 px-5 py-5 text-left"
-        >
-          <p className="text-sm text-white/55">{hasSavedProfile ? "Join with your saved profile" : "I already have a code"}</p>
-          <p className="mt-1 text-2xl font-semibold">Continue as guest</p>
-        </button>
+        </div>
       </div>
     </div>
   );
 }
 
 function ProfileScreen({
-  role,
-  name,
+  profile,
+  fullName,
   countryCode,
   city,
+  submitting,
+  avatarUploading,
+  fileInputRef,
   onBack,
-  onNameChange,
+  onFullNameChange,
   onCountryChange,
   onCityChange,
-  onContinue,
+  onPickAvatar,
+  onFileChange,
+  onSave,
 }: {
-  role: Role;
-  name: string;
+  profile: Profile | null;
+  fullName: string;
   countryCode: string;
   city: string;
+  submitting: boolean;
+  avatarUploading: boolean;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
   onBack: () => void;
-  onNameChange: (value: string) => void;
+  onFullNameChange: (value: string) => void;
   onCountryChange: (value: string) => void;
   onCityChange: (value: string) => void;
-  onContinue: () => void;
-}) {
-  return (
-    <ScreenShell
-      title="Create your simple login."
-      subtitle="Save your name, country, and city once so you do not have to type them every time."
-      onBack={onBack}
-      actionLabel="Save and continue"
-      onAction={onContinue}
-    >
-      <div className="space-y-4">
-        <Field label={role === "host" ? "Host name" : "Your name"}>
-          <input
-            value={name}
-            onChange={(event) => onNameChange(event.target.value)}
-            className={fieldClass}
-            placeholder="Enter your name"
-          />
-        </Field>
-        <Field label="Country">
-          <select
-            value={countryCode}
-            onChange={(event) => onCountryChange(event.target.value)}
-            className={fieldClass}
-          >
-            {countries.map((country) => (
-              <option key={country.code} value={country.code}>
-                {country.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="City">
-          <input
-            value={city}
-            onChange={(event) => onCityChange(event.target.value)}
-            className={fieldClass}
-            placeholder="City"
-          />
-        </Field>
-      </div>
-    </ScreenShell>
-  );
-}
-
-function RoomScreen({
-  role,
-  roomCode,
-  onBack,
-  onRoomCodeChange,
-  onContinue,
-}: {
-  role: Role;
-  roomCode: string;
-  onBack: () => void;
-  onRoomCodeChange: (value: string) => void;
-  onContinue: () => void;
-}) {
-  return (
-    <ScreenShell
-      title={role === "host" ? "Lock in the room." : "Enter the room code."}
-      subtitle="The room is where the group sync happens."
-      onBack={onBack}
-      actionLabel={role === "host" ? "Open room" : "Join room"}
-      onAction={onContinue}
-    >
-      <div className="rounded-[30px] border border-white/10 bg-white/6 p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/45">Room code</p>
-        <input
-          value={roomCode}
-          onChange={(event) => onRoomCodeChange(event.target.value.toUpperCase())}
-          className={`${fieldClass} mt-4 text-center text-3xl font-semibold tracking-[0.24em]`}
-          placeholder="BITE-204"
-        />
-      </div>
-    </ScreenShell>
-  );
-}
-
-function ShareScreen({
-  name,
-  city,
-  roomCode,
-  joinLink,
-  qrCodeUrl,
-  onBack,
-  onContinue,
-}: {
-  name: string;
-  city: string;
-  roomCode: string;
-  joinLink: string;
-  qrCodeUrl: string;
-  onBack: () => void;
-  onContinue: () => void;
-}) {
-  return (
-    <ScreenShell
-      title="Share the room."
-      subtitle="Friends scan the QR and land in the same session."
-      onBack={onBack}
-      actionLabel="Start swiping"
-      onAction={onContinue}
-    >
-      <div className="space-y-4">
-        <div className="grid place-items-center rounded-[32px] bg-[linear-gradient(180deg,#2b1d16_0%,#171217_100%)] p-5">
-          {qrCodeUrl ? (
-            <Image src={qrCodeUrl} alt="Room QR code" width={220} height={220} className="rounded-[28px]" />
-          ) : (
-            <div className="grid h-[220px] w-[220px] place-items-center rounded-[28px] bg-white/8 text-white/55">
-              Loading QR...
-            </div>
-          )}
-        </div>
-        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-          <p className="text-sm text-white/50">Hosted by {name}</p>
-          <p className="mt-2 text-3xl font-semibold tracking-[0.18em]">{roomCode}</p>
-          <p className="mt-3 text-sm leading-7 text-white/55">{city}</p>
-          <p className="mt-2 break-all text-xs leading-6 text-white/42">{joinLink}</p>
-        </div>
-      </div>
-    </ScreenShell>
-  );
-}
-
-function CategorySwipeScreen({
-  currentCategory,
-  nextCategory,
-  index,
-  total,
-  dragX,
-  likedCategories,
-  onBack,
-  onPointerDown,
-  onPointerMove,
-  onPointerUp,
-}: {
-  currentCategory: Category;
-  nextCategory?: Category;
-  index: number;
-  total: number;
-  dragX: number;
-  likedCategories: string[];
-  onBack: () => void;
-  onPointerDown: (clientX: number) => void;
-  onPointerMove: (clientX: number) => void;
-  onPointerUp: () => void;
-}) {
-  return (
-    <SwipeShell
-      title="Swipe food styles."
-      subtitle="Right means yes. Left means no. No buttons, just vibe."
-      onBack={onBack}
-      counter={`${index + 1} / ${total}`}
-      chips={likedCategories.map((id) => {
-        const item = categories.find((entry) => entry.id === id);
-        return item ? `${item.emoji} ${item.title}` : "";
-      })}
-    >
-      <CardStackBackdrop label={nextCategory?.title} emoji={nextCategory?.emoji} />
-      <article
-        role="button"
-        tabIndex={0}
-        onPointerDown={(event) => onPointerDown(event.clientX)}
-        onPointerMove={(event) => onPointerMove(event.clientX)}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-        className={`relative z-10 h-[min(48dvh,500px)] min-h-[360px] w-full touch-none select-none rounded-[34px] bg-gradient-to-br ${currentCategory.accent} p-5 shadow-[0_30px_90px_rgba(0,0,0,0.24)] transition-transform sm:rounded-[38px] sm:p-6`}
-        style={{ transform: `translateX(${dragX}px) rotate(${dragX / 15}deg)` }}
-      >
-        <SwipeBadges dragX={dragX} />
-        <div className="flex h-full flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between">
-              <span className="rounded-full bg-black/12 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-stone-800/75">
-                Food mood
-              </span>
-              <span className="rounded-[24px] bg-white/70 px-4 py-3 text-5xl">{currentCategory.emoji}</span>
-            </div>
-            <h2 className="mt-5 text-4xl font-semibold text-stone-950 sm:text-5xl">{currentCategory.title}</h2>
-            <p className="mt-3 max-w-sm text-base leading-7 text-stone-800/80 sm:text-lg sm:leading-8">{currentCategory.blurb}</p>
-          </div>
-
-          <div className="grid gap-3">
-            <div className="rounded-[26px] bg-white/62 p-4">
-              <p className="text-sm text-stone-600">Swipe right if the group would actually enjoy this tonight.</p>
-            </div>
-            <div className="flex justify-between text-sm font-semibold text-stone-700/70">
-              <span>Left to pass</span>
-              <span>Right to keep</span>
-            </div>
-          </div>
-        </div>
-      </article>
-    </SwipeShell>
-  );
-}
-
-function RestaurantSwipeScreen({
-  city,
-  currentRestaurant,
-  nextRestaurant,
-  dragX,
-  index,
-  total,
-  likedCategories,
-  onBack,
-  onPointerDown,
-  onPointerMove,
-  onPointerUp,
-}: {
-  city: string;
-  currentRestaurant: SwipeableRestaurant;
-  nextRestaurant?: SwipeableRestaurant;
-  dragX: number;
-  index: number;
-  total: number;
-  likedCategories: string[];
-  onBack: () => void;
-  onPointerDown: (clientX: number) => void;
-  onPointerMove: (clientX: number) => void;
-  onPointerUp: () => void;
-}) {
-  return (
-    <SwipeShell
-      title="Swipe restaurants."
-      subtitle={`Now the app shows places in ${city} that match your food mood.`}
-      onBack={onBack}
-      counter={`${index + 1} / ${total}`}
-      chips={likedCategories.map((id) => {
-        const item = categories.find((entry) => entry.id === id);
-        return item ? `${item.emoji} ${item.title}` : "";
-      })}
-    >
-      <CardStackBackdrop label={nextRestaurant?.name} emoji="🍽️" />
-      <article
-        role="button"
-        tabIndex={0}
-        onPointerDown={(event) => onPointerDown(event.clientX)}
-        onPointerMove={(event) => onPointerMove(event.clientX)}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-        className="relative z-10 h-[min(52dvh,540px)] min-h-[390px] w-full touch-none select-none overflow-hidden rounded-[34px] border border-white/10 bg-[#1b161d] shadow-[0_30px_90px_rgba(0,0,0,0.28)] transition-transform sm:rounded-[38px]"
-        style={{ transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)` }}
-      >
-        <SwipeBadges dragX={dragX} />
-        <div className="relative h-full">
-          <div className="absolute inset-0">
-            <Image
-              src={currentRestaurant.menuPreviews[0]?.image ?? "/next.svg"}
-              alt={currentRestaurant.name}
-              fill
-              className="object-cover"
-              sizes="(max-width: 768px) 100vw, 420px"
-            />
-            <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(13,10,14,0.05)_0%,rgba(13,10,14,0.72)_52%,rgba(13,10,14,0.98)_100%)]" />
-          </div>
-
-          <div className="relative flex h-full flex-col justify-between p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div className="rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-white/82">
-                {currentRestaurant.mapLabel}
-              </div>
-              <div className="rounded-full bg-black/25 px-4 py-2 text-sm font-semibold text-white/85">
-                {currentRestaurant.eta}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex flex-wrap gap-2">
-                {currentRestaurant.overlap.map((id) => {
-                  const item = categories.find((entry) => entry.id === id);
-                  if (!item) return null;
-                  return (
-                    <span key={id} className="rounded-full bg-white/12 px-3 py-2 text-xs font-semibold text-white/90">
-                      {item.emoji} {item.title}
-                    </span>
-                  );
-                })}
-              </div>
-              <h2 className="mt-5 text-3xl font-semibold leading-tight text-white sm:text-4xl">{currentRestaurant.name}</h2>
-              <p className="mt-3 text-sm leading-6 text-white/72 sm:text-base sm:leading-7">{currentRestaurant.vibe}</p>
-              <div className="mt-5 flex items-center gap-3 text-sm font-medium text-white/76">
-                <span>{currentRestaurant.priceLevel}</span>
-                <span className="h-1 w-1 rounded-full bg-white/40" />
-                <span>{currentRestaurant.reviewCount} reviews</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </article>
-    </SwipeShell>
-  );
-}
-
-function SummaryScreen({
-  city,
-  likedCategories,
-  shortlistedRestaurants,
-  onRestart,
-  onBack,
-  onOpenMenu,
-}: {
-  city: string;
-  likedCategories: string[];
-  shortlistedRestaurants: SwipeableRestaurant[];
-  onRestart: () => void;
-  onBack: () => void;
-  onOpenMenu: (restaurant: Restaurant, item: Restaurant["menuPreviews"][number]) => void;
-}) {
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <div className="flex items-center justify-between">
-        <button onClick={onBack} className={ghostButtonClass}>
-          Back
-        </button>
-        <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/70">
-          Final picks
-        </span>
-      </div>
-
-      <div className="rounded-[30px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
-        <div className="rounded-[29px] bg-[#161218] p-5">
-          <p className="text-sm text-white/52">Best matches in {city}</p>
-          <h2 className="mt-3 text-4xl font-semibold leading-tight text-white">
-            {shortlistedRestaurants[0]?.name ?? "No picks yet"}
-          </h2>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {likedCategories.map((id) => {
-              const item = categories.find((entry) => entry.id === id);
-              if (!item) return null;
-              return (
-                <span key={id} className="rounded-full bg-white/10 px-3 py-2 text-xs font-semibold text-white/85">
-                  {item.emoji} {item.title}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
-        {shortlistedRestaurants.map((restaurant) => (
-          <div key={restaurant.id} className="rounded-[28px] border border-white/10 bg-white/6 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-2xl font-semibold text-white">{restaurant.name}</p>
-                <p className="mt-2 text-sm text-white/56">
-                  {restaurant.mapLabel} • {restaurant.eta} • {restaurant.priceLevel}
-                </p>
-              </div>
-              <span className="rounded-full bg-white/10 px-3 py-2 text-xs font-semibold text-white/82">
-                {restaurant.rating.toFixed(1)}
-              </span>
-            </div>
-
-            <div className="mt-4 grid gap-3">
-              {restaurant.menuPreviews.slice(0, 2).map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => onOpenMenu(restaurant, item)}
-                  className="overflow-hidden rounded-[24px] border border-white/8 bg-black/15 text-left"
-                >
-                  <div className="relative h-36">
-                    <Image
-                      src={item.image}
-                      alt={item.title}
-                      fill
-                      className="object-cover"
-                      sizes="(max-width: 768px) 100vw, 420px"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-3 p-4">
-                    <div>
-                      <p className="font-semibold text-white">{item.title}</p>
-                      <p className="mt-1 text-sm text-white/55">Tap to open menu preview</p>
-                    </div>
-                    <span className="text-sm font-semibold text-orange-300">{item.price}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <button
-        onClick={onRestart}
-        className="mt-auto w-full rounded-full bg-white px-5 py-4 font-semibold text-stone-950"
-      >
-        Start over
-      </button>
-    </div>
-  );
-}
-
-function ScreenShell({
-  title,
-  subtitle,
-  children,
-  onBack,
-  onAction,
-  actionLabel,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-  onBack: () => void;
-  onAction: () => void;
-  actionLabel: string;
+  onPickAvatar: () => void;
+  onFileChange: (file: File | null) => void;
+  onSave: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
@@ -904,109 +719,121 @@ function ScreenShell({
         <button onClick={onBack} className={ghostButtonClass}>
           Back
         </button>
-        <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/70">
-          Setup
+        <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.24em] text-white/70">
+          Profile
         </span>
       </div>
 
       <div>
-        <h1 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">{title}</h1>
-        <p className="mt-3 text-sm leading-7 text-white/58 sm:text-base sm:leading-8">{subtitle}</p>
+        <h1 className="text-3xl font-semibold text-white">Your profile</h1>
+        <p className="mt-2 text-sm leading-7 text-white/58">
+          Update your city or upload a picture. This is the data BiteSync uses when you host or join rooms.
+        </p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="space-y-4 pb-2">
+          <div className="flex items-center gap-4 rounded-[28px] border border-white/10 bg-white/6 p-4">
+            <div className="h-18 w-18 overflow-hidden rounded-full border border-white/10 bg-white/10">
+              {profile?.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={profile.avatar_url} alt={profile.full_name} className="h-full w-full object-cover" />
+              ) : (
+                <div className="grid h-full w-full place-items-center text-lg font-semibold text-white">
+                  {getInitials(fullName || "BiteSync User")}
+                </div>
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="text-sm text-white/55">Profile picture</p>
+              <button onClick={onPickAvatar} className="mt-2 text-sm font-semibold text-orange-300">
+                {avatarUploading ? "Uploading..." : "Upload photo"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+              />
+            </div>
+          </div>
 
-      <button
-        onClick={onAction}
-        className="w-full rounded-full bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] px-5 py-4 font-semibold text-white shadow-[0_20px_60px_rgba(255,92,124,0.28)]"
-      >
-        {actionLabel}
+          <Field label="Full name">
+            <input value={fullName} onChange={(event) => onFullNameChange(event.target.value)} className={fieldClass} />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Country">
+              <select value={countryCode} onChange={(event) => onCountryChange(event.target.value)} className={fieldClass}>
+                {countries.map((country) => (
+                  <option key={country.code} value={country.code}>
+                    {country.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="City">
+              <input value={city} onChange={(event) => onCityChange(event.target.value)} className={fieldClass} />
+            </Field>
+          </div>
+        </div>
+      </div>
+
+      <button onClick={onSave} disabled={submitting} className={primaryButtonClass}>
+        {submitting ? "Saving..." : "Save profile"}
       </button>
     </div>
   );
 }
 
-function SwipeShell({
-  title,
-  subtitle,
-  counter,
-  chips,
-  children,
+function RoomScreen({
+  profile,
+  room,
+  mode,
   onBack,
 }: {
-  title: string;
-  subtitle: string;
-  counter: string;
-  chips: string[];
-  children: React.ReactNode;
+  profile: Profile | null;
+  room: RoomRecord | null;
+  mode: RoomMode;
   onBack: () => void;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className={ghostButtonClass}>
           Back
         </button>
-        <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/70">
-          {counter}
+        <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.24em] text-white/70">
+          {mode === "host" ? "Host mode" : "Joined"}
         </span>
       </div>
 
-      <div>
-        <h1 className="text-3xl font-semibold leading-tight text-white sm:text-4xl">{title}</h1>
-        <p className="mt-2 text-sm leading-7 text-white/58 sm:text-base sm:leading-8">{subtitle}</p>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {chips.length > 0 ? (
-          chips.map((chip) => (
-            <span key={chip} className="rounded-full border border-white/10 bg-white/6 px-3 py-2 text-xs font-semibold text-white/82">
-              {chip}
-            </span>
-          ))
-        ) : (
-          <span className="rounded-full border border-dashed border-white/10 px-3 py-2 text-xs font-semibold text-white/38">
-            No likes yet
-          </span>
-        )}
-      </div>
-
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
-function CardStackBackdrop({ label, emoji }: { label?: string; emoji?: string }) {
-  return (
-    <>
-      <div className="absolute inset-x-5 top-8 h-[500px] rounded-[36px] bg-white/6 blur-[1px]" />
-      <div className="absolute inset-x-8 top-12 h-[500px] rounded-[36px] bg-white/4" />
-      {label ? (
-        <div className="absolute bottom-2 text-center text-sm font-medium text-white/28">
-          Up next: {emoji ? `${emoji} ` : ""}
-          {label}
+      <div className="rounded-[30px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
+        <div className="rounded-[29px] bg-[#161218] p-5">
+          <p className="text-sm text-white/55">{mode === "host" ? "Your room is live" : "You are inside the room"}</p>
+          <h1 className="mt-3 text-4xl font-semibold tracking-[0.16em] text-white">{room?.code}</h1>
+          <p className="mt-4 text-sm text-white/58">
+            {room?.city}, {room?.country_code}
+          </p>
         </div>
-      ) : null}
-    </>
-  );
-}
+      </div>
 
-function SwipeBadges({ dragX }: { dragX: number }) {
-  return (
-    <>
-      <div
-        className="absolute left-6 top-6 z-20 rounded-full border-2 border-rose-400 bg-black/18 px-4 py-2 text-sm font-black uppercase tracking-[0.24em] text-rose-300 transition"
-        style={{ opacity: dragX < 0 ? Math.min(Math.abs(dragX) / 120, 1) : 0 }}
-      >
-        Nope
+      <div className="space-y-3">
+        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+          <p className="text-sm text-white/55">Logged in as</p>
+          <p className="mt-2 text-2xl font-semibold text-white">{profile?.full_name}</p>
+        </div>
+
+        <div className="rounded-[28px] border border-white/10 bg-white/6 p-4">
+          <p className="text-sm text-white/55">Next step</p>
+          <p className="mt-2 text-base leading-7 text-white/78">
+            This room is now stored in Supabase. The next integration step is live multi-user swipes and synced restaurant voting inside the room.
+          </p>
+        </div>
       </div>
-      <div
-        className="absolute right-6 top-6 z-20 rounded-full border-2 border-emerald-400 bg-black/18 px-4 py-2 text-sm font-black uppercase tracking-[0.24em] text-emerald-300 transition"
-        style={{ opacity: dragX > 0 ? Math.min(dragX / 120, 1) : 0 }}
-      >
-        Yes
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -1019,35 +846,32 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function MenuModal({ state, onClose }: { state: MenuState; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-md">
-      <div className="w-full max-w-3xl overflow-hidden rounded-[34px] border border-white/10 bg-[#151117] shadow-[0_30px_120px_rgba(0,0,0,0.5)]">
-        <div className="grid md:grid-cols-[1.05fr_0.95fr]">
-          <div className="relative min-h-[320px]">
-            <Image src={state.image} alt={state.title} fill className="object-cover" sizes="(max-width: 768px) 100vw, 60vw" />
-          </div>
-          <div className="flex flex-col justify-between p-6">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/42">Menu preview</p>
-              <h3 className="mt-4 text-4xl font-semibold text-white">{state.title}</h3>
-              <p className="mt-3 text-lg text-white/58">{state.restaurantName}</p>
-              <span className="mt-5 inline-flex rounded-full bg-white px-4 py-2 text-sm font-semibold text-stone-950">
-                {state.price}
-              </span>
-            </div>
-            <button onClick={onClose} className="mt-8 rounded-full bg-white px-5 py-4 font-semibold text-stone-950">
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function getInitials(value: string) {
+  return value
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+function createRoomCode(city: string) {
+  const cityCode = city.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "BSYN";
+  const suffix = Math.floor(100 + Math.random() * 900);
+  return `${cityCode}-${suffix}`;
 }
 
 const fieldClass =
-  "w-full rounded-[24px] border border-white/10 bg-white/6 px-4 py-4 text-white outline-none transition focus:border-white/28";
+  "w-full rounded-[22px] border border-white/10 bg-white/6 px-4 py-3 text-white outline-none transition focus:border-white/28";
 
 const ghostButtonClass =
   "rounded-full border border-white/10 bg-white/6 px-4 py-2 text-sm font-semibold text-white/80";
+
+const primaryButtonClass =
+  "w-full rounded-full bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] px-5 py-4 font-semibold text-white shadow-[0_18px_55px_rgba(255,92,124,0.24)]";
+
+const primaryCardClass =
+  "w-full rounded-[28px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_52%,#8f6bff_100%)] px-5 py-5 text-left shadow-[0_20px_70px_rgba(255,101,101,0.28)]";
+
+const menuItemClass =
+  "w-full rounded-xl px-3 py-2 text-left text-sm font-medium text-white/80 transition hover:bg-white/8";
