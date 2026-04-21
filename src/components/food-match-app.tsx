@@ -910,7 +910,12 @@ export function FoodMatchApp() {
         return;
       }
 
-      if (memberCount <= 1) {
+      const distinctPeople = new Set(
+        visibleRoomMembers.map((m) => roomMemberKey(m)).filter((key) => key && key !== "n:"),
+      ).size;
+      const isSoloRoom = distinctPeople <= 1;
+
+      if (isSoloRoom) {
         setRoomStage("restaurants");
         return;
       }
@@ -1232,11 +1237,24 @@ export function FoodMatchApp() {
     if (roomStage !== "waiting_categories") {
       return;
     }
+    if (memberCount <= 1) {
+      setRoomStage("restaurants");
+      return;
+    }
     if (!allMembersFinishedCategories) {
       return;
     }
     setRoomStage("category_match");
-  }, [roomStage, allMembersFinishedCategories]);
+  }, [roomStage, allMembersFinishedCategories, memberCount]);
+
+  useEffect(() => {
+    if (roomStage !== "category_match") {
+      return;
+    }
+    if (memberCount <= 1) {
+      setRoomStage("restaurants");
+    }
+  }, [roomStage, memberCount]);
 
   useEffect(() => {
     if (!activeRoom) {
