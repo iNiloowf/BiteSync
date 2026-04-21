@@ -1397,6 +1397,24 @@ export function FoodMatchApp() {
     };
   }, [activeRoom, diningPlacesFetchKey]);
 
+  const pendingRestaurantPrefetchKey = useMemo(
+    () => pendingRestaurants.map((r) => r.id).join("|"),
+    [pendingRestaurants],
+  );
+  const pendingRestaurantsRef = useRef(pendingRestaurants);
+  pendingRestaurantsRef.current = pendingRestaurants;
+
+  useEffect(() => {
+    if (roomStage !== "restaurants" || typeof window === "undefined") return;
+    for (const place of pendingRestaurantsRef.current.slice(1, 10)) {
+      const url = place.photoUrls?.[0];
+      if (!url) continue;
+      const img = new window.Image();
+      img.decoding = "async";
+      img.src = url;
+    }
+  }, [roomStage, pendingRestaurantPrefetchKey]);
+
   if (loading) {
     return (
       <main className="grid h-[100dvh] place-items-center overflow-hidden bg-[#0f0c12] text-white">
@@ -1874,7 +1892,13 @@ function ProfileScreen({
   );
 }
 
-function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
+const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
+  restaurant,
+  heroImagePriority = "low",
+}: {
+  restaurant: CityRestaurant;
+  heroImagePriority?: "high" | "low";
+}) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const photos = restaurant.photoUrls ?? [];
   const extraPhotos = photos.slice(1);
@@ -1929,7 +1953,14 @@ function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
         <div className="relative min-h-[min(140px,36dvh)] flex-1 overflow-hidden bg-black/35">
           {photos[0] ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={photos[0]} alt="" className="h-full min-h-[min(140px,36dvh)] w-full object-cover" />
+            <img
+              src={photos[0]}
+              alt=""
+              className="h-full min-h-[min(140px,36dvh)] w-full object-cover"
+              decoding="async"
+              fetchPriority={heroImagePriority}
+              loading={heroImagePriority === "high" ? "eager" : "lazy"}
+            />
           ) : (
             <div className="flex h-full min-h-[32dvh] items-center justify-center text-sm text-white/40">No image</div>
           )}
@@ -1979,7 +2010,8 @@ function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
       {lightbox}
     </>
   );
-}
+},
+(prev, next) => prev.restaurant.id === next.restaurant.id && prev.heroImagePriority === next.heroImagePriority);
 
 const CategorySwipeCard = memo(function CategorySwipeCardInner({ category }: { category: Category }) {
   return (
@@ -2156,6 +2188,7 @@ function RoomScreen({
           <div className="min-h-0 flex-1">
             {currentCategory ? (
               <SwipePanel
+                key={currentCategory.id}
                 item={currentCategory}
                 nextItem={nextCategory}
                 likeLabel="Like"
@@ -2213,6 +2246,7 @@ function RoomScreen({
               </div>
             ) : currentRestaurant ? (
               <SwipePanel
+                key={currentRestaurant.id}
                 fillHeight
                 item={currentRestaurant}
                 nextItem={nextRestaurant}
@@ -2220,7 +2254,12 @@ function RoomScreen({
                 skipLabel="Pass"
                 onLike={(place) => onRestaurantDecision(place.id, "like")}
                 onSkip={(place) => onRestaurantDecision(place.id, "skip")}
-                renderCard={(restaurant) => <RestaurantSwipeCard restaurant={restaurant} />}
+                renderCard={(restaurant) => (
+                  <RestaurantSwipeCard
+                    restaurant={restaurant}
+                    heroImagePriority={restaurant.id === currentRestaurant.id ? "high" : "low"}
+                  />
+                )}
               />
             ) : (
               <div className="rounded-2xl bg-white/6 p-3 text-center">
@@ -2239,40 +2278,45 @@ function RoomScreen({
       ) : null}
 
       {stage === "final" ? (
-        <div className="space-y-4">
-          <div className="rounded-2xl bg-white/6 p-4">
-            <p className="text-lg font-semibold text-white">{"Everyone's picks"}</p>
-            <p className="mt-2 text-sm leading-6 text-white/58">
-              Restaurants liked by everyone in the room, highest rating first.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            {finalRestaurants.length > 0 ? (
-              finalRestaurants.map((restaurant) => (
-                <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-white">{restaurant.name}</p>
-                      <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                      <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
-                No restaurant has been liked by everyone yet. Keep swiping or wait for the rest of the room to finish.
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-0.5 pb-2">
+            <div className="space-y-4">
+              <div className="rounded-2xl bg-white/6 p-4">
+                <p className="text-lg font-semibold text-white">{"Everyone's picks"}</p>
+                <p className="mt-2 text-sm leading-6 text-white/58">
+                  Restaurants liked by everyone in the room, highest rating first.
+                </p>
               </div>
-            )}
-          </div>
 
-          <button onClick={() => onChangeStage("restaurants")} className={ghostButtonClass}>
-            Back to restaurant cards
-          </button>
+              <div className="space-y-2">
+                {finalRestaurants.length > 0 ? (
+                  finalRestaurants.map((restaurant) => (
+                    <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-white">{restaurant.name}</p>
+                          <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+                          <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
+                    No restaurant has been liked by everyone yet. Keep swiping or wait for the rest of the room to
+                    finish.
+                  </div>
+                )}
+              </div>
+
+              <button type="button" onClick={() => onChangeStage("restaurants")} className={ghostButtonClass}>
+                Back to restaurant cards
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </>
@@ -2368,7 +2412,7 @@ function RoomScreen({
       ) : null}
 
       {immersive ? (
-        <div className="room-swipe-reveal flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
           {stage === "waiting_categories" || stage === "category_match" ? (
             <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2">
               <button type="button" onClick={onBack} className={ghostButtonClass}>
@@ -2463,7 +2507,7 @@ function SwipePanel<T>({
         } else {
           onSkip(target);
         }
-      }, 140);
+      }, 88);
     },
     [onLike, onSkip, reset],
   );
@@ -2481,15 +2525,13 @@ function SwipePanel<T>({
           <div
             className={
               fillHeight
-                ? "pointer-events-none absolute inset-2 z-0 overflow-hidden rounded-[28px] opacity-40 sm:inset-3"
-                : "pointer-events-none absolute inset-2 z-0 overflow-hidden rounded-[28px] opacity-40 sm:inset-3"
+                ? "pointer-events-none absolute inset-2 z-0 overflow-hidden rounded-[28px] opacity-50 sm:inset-3"
+                : "pointer-events-none absolute inset-2 z-0 overflow-hidden rounded-[28px] opacity-50 sm:inset-3"
             }
           >
             <div
               className={
-                fillHeight
-                  ? "h-full min-h-0 origin-top scale-[0.96]"
-                  : "flex h-full min-h-0 origin-top scale-[0.96] items-stretch justify-center"
+                fillHeight ? "h-full min-h-0" : "flex h-full min-h-0 items-stretch justify-center"
               }
             >
               {renderCard(nextItem)}
@@ -2534,7 +2576,7 @@ function SwipePanel<T>({
           className="absolute inset-0 z-10 will-change-transform"
           style={{
             transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)`,
-            transition: dragging ? "none" : "transform 160ms ease-out",
+            transition: dragging ? "none" : "transform 110ms ease-out",
           }}
         >
           <div className={`relative h-full ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
