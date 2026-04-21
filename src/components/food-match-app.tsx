@@ -100,6 +100,11 @@ type RestaurantVotesTable = {
   insert: (value: unknown) => Promise<{ error?: { message?: string } | null }>;
 };
 
+type ErrorLike = {
+  message?: string;
+  code?: string;
+};
+
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -384,7 +389,7 @@ export function FoodMatchApp() {
         if (error) throw error;
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Something went wrong.");
+      setMessage(getErrorMessage(error, "Something went wrong."));
     } finally {
       setSubmitting(false);
     }
@@ -433,7 +438,7 @@ export function FoodMatchApp() {
       }
       setScreen("home");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save your profile.");
+      setMessage(getErrorMessage(error, "Could not save your profile."));
     } finally {
       setSubmitting(false);
     }
@@ -470,7 +475,7 @@ export function FoodMatchApp() {
       if (profileError) throw profileError;
       setProfile(updated as Profile);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Avatar upload failed.");
+      setMessage(getErrorMessage(error, "Avatar upload failed."));
     } finally {
       setAvatarUploading(false);
     }
@@ -482,18 +487,33 @@ export function FoodMatchApp() {
     setMessage("");
 
     try {
-      const code = createRoomCode(profile.city);
-      const { data: roomData, error: roomError } = await getRoomsTable()
-        .insert({
-          code,
-          host_name: profile.full_name,
-          country_code: profile.country_code,
-          city: profile.city,
-        })
-        .select()
-        .single();
+      let roomData: RoomRecord | null = null;
 
-      if (roomError) throw roomError;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const code = createRoomCode(profile.city);
+        const { data, error: roomError } = await getRoomsTable()
+          .insert({
+            code,
+            host_name: profile.full_name,
+            country_code: profile.country_code,
+            city: profile.city,
+          })
+          .select()
+          .single();
+
+        if (!roomError) {
+          roomData = data as RoomRecord;
+          break;
+        }
+
+        if (!isDuplicateKeyError(roomError)) {
+          throw roomError;
+        }
+      }
+
+      if (!roomData) {
+        throw new Error("Could not generate a free room code. Please try again.");
+      }
 
       const { error: memberError } = await getMembersTable().insert({
         room_id: roomData.id,
@@ -512,7 +532,7 @@ export function FoodMatchApp() {
       setRoomMode("host");
       setScreen("room");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not create room.");
+      setMessage(getErrorMessage(error, "Could not create room."));
     } finally {
       setSubmitting(false);
     }
@@ -553,7 +573,7 @@ export function FoodMatchApp() {
       setRoomMode("join");
       setScreen("room");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not join room.");
+      setMessage(getErrorMessage(error, "Could not join room."));
     } finally {
       setSubmitting(false);
     }
@@ -584,7 +604,7 @@ export function FoodMatchApp() {
         setRoomStage("restaurants");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save your category vote.");
+      setMessage(getErrorMessage(error, "Could not save your category vote."));
     }
   }
 
@@ -613,7 +633,7 @@ export function FoodMatchApp() {
         setRoomStage("final");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save your restaurant vote.");
+      setMessage(getErrorMessage(error, "Could not save your restaurant vote."));
     }
   }
 
@@ -773,7 +793,7 @@ export function FoodMatchApp() {
         setCityRestaurants(payload.places ?? []);
       } catch (error) {
         if (!active || controller.signal.aborted) return;
-        setMessage(error instanceof Error ? error.message : "Could not load restaurants.");
+        setMessage(getErrorMessage(error, "Could not load restaurants."));
         setCityRestaurants([]);
       } finally {
         if (active) {
@@ -1668,6 +1688,30 @@ function createRoomCode(city: string) {
   const cityCode = city.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "BSYN";
   const suffix = Math.floor(100 + Math.random() * 900);
   return `${cityCode}-${suffix}`;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "object" && error !== null) {
+    const maybeError = error as ErrorLike;
+    if (maybeError.message) {
+      return maybeError.message;
+    }
+  }
+
+  return fallback;
+}
+
+function isDuplicateKeyError(error: unknown) {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const maybeError = error as ErrorLike;
+  return maybeError.code === "23505" || maybeError.message?.toLowerCase().includes("duplicate key") === true;
 }
 
 function getSharedLikedIds<T extends { user_id: string | null; decision: "like" | "skip" }>(params: {
