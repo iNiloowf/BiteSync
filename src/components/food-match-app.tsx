@@ -264,6 +264,9 @@ export function FoodMatchApp() {
   const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
   const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
   const [swipePickLabel, setSwipePickLabel] = useState("");
+  const [undoHidePlace, setUndoHidePlace] = useState<CityRestaurant | null>(null);
+  const undoHidePlaceRef = useRef<CityRestaurant | null>(null);
+  const undoHideTimerRef = useRef<number | null>(null);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1122,25 +1125,6 @@ export function FoodMatchApp() {
     [getProfilesTable, supabase, session?.user],
   );
 
-  const hideRestaurantForever = useCallback(
-    async (restaurant: CityRestaurant) => {
-      const p = profileRef.current;
-      if (!p) return;
-      const prev = p.hidden_restaurants ?? [];
-      if (prev.some((h) => h.id === restaurant.id)) return;
-      try {
-        await persistProfileHidden([...prev, { id: restaurant.id, name: restaurant.name }]);
-        setRestaurantVotes((votes) => votes.filter((v) => v.restaurant_id !== restaurant.id));
-        setSwipePickLabel(`Hidden forever · ${restaurant.name}`);
-      } catch (error) {
-        setMessage(
-          getErrorMessage(error, "Could not save. Add the hidden_restaurants column (see Supabase migration)."),
-        );
-      }
-    },
-    [persistProfileHidden],
-  );
-
   const restoreHiddenRestaurantIds = useCallback(
     async (ids: readonly string[]) => {
       const p = profileRef.current;
@@ -1157,6 +1141,69 @@ export function FoodMatchApp() {
       }
     },
     [persistProfileHidden],
+  );
+
+  const clearUndoHideTimer = useCallback(() => {
+    if (undoHideTimerRef.current != null) {
+      window.clearTimeout(undoHideTimerRef.current);
+      undoHideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleUndoHide = useCallback(
+    (restaurant: CityRestaurant) => {
+      clearUndoHideTimer();
+      undoHidePlaceRef.current = restaurant;
+      setUndoHidePlace(restaurant);
+      undoHideTimerRef.current = window.setTimeout(() => {
+        undoHidePlaceRef.current = null;
+        setUndoHidePlace(null);
+        undoHideTimerRef.current = null;
+      }, 5500) as unknown as number;
+    },
+    [clearUndoHideTimer],
+  );
+
+  const handleUndoHide = useCallback(async () => {
+    const place = undoHidePlaceRef.current;
+    if (!place) return;
+    undoHidePlaceRef.current = null;
+    clearUndoHideTimer();
+    setUndoHidePlace(null);
+    try {
+      await restoreHiddenRestaurantIds([place.id]);
+      setSwipePickLabel(`Restored · ${place.name}`);
+    } catch {
+      /* restoreHiddenRestaurantIds sets message */
+    }
+  }, [clearUndoHideTimer, restoreHiddenRestaurantIds]);
+
+  useEffect(() => {
+    return () => {
+      if (undoHideTimerRef.current != null) {
+        window.clearTimeout(undoHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  const hideRestaurantForever = useCallback(
+    async (restaurant: CityRestaurant) => {
+      const p = profileRef.current;
+      if (!p) return;
+      const prev = p.hidden_restaurants ?? [];
+      if (prev.some((h) => h.id === restaurant.id)) return;
+      try {
+        await persistProfileHidden([...prev, { id: restaurant.id, name: restaurant.name }]);
+        setRestaurantVotes((votes) => votes.filter((v) => v.restaurant_id !== restaurant.id));
+        setSwipePickLabel("");
+        scheduleUndoHide(restaurant);
+      } catch (error) {
+        setMessage(
+          getErrorMessage(error, "Could not save. Add the hidden_restaurants column (see Supabase migration)."),
+        );
+      }
+    },
+    [persistProfileHidden, scheduleUndoHide],
   );
 
   const handleRestoreHiddenPlaces = useCallback(
@@ -1594,7 +1641,7 @@ export function FoodMatchApp() {
   return (
     <main className="h-[100dvh] overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,120,68,0.14),_transparent_22%),radial-gradient(circle_at_bottom_right,_rgba(111,66,193,0.12),_transparent_24%),#0f0c12] text-white">
       <div className="mx-auto flex h-full w-full max-w-[460px] flex-col px-3 py-3 sm:px-4 sm:py-4">
-        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#141117]/92 shadow-[0_24px_100px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+        <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#141117]/92 shadow-[0_24px_100px_rgba(0,0,0,0.45)] backdrop-blur-xl">
           <AppHeader
             profile={profile}
             screen={screen}
@@ -1605,6 +1652,15 @@ export function FoodMatchApp() {
               setMenuOpen(false);
               setScreen("profile");
             }}
+            onOpenHiddenPlaces={
+              hasSupabaseEnv
+                ? () => {
+                    setMenuOpen(false);
+                    setScreen("hidden_places");
+                  }
+                : undefined
+            }
+            hiddenPlaceCount={(profile?.hidden_restaurants ?? []).length}
             onSignOut={handleSignOut}
           />
 
@@ -1657,11 +1713,9 @@ export function FoodMatchApp() {
                 profile={profile}
                 roomCodeInput={roomCodeInput}
                 submitting={submitting}
-                hiddenPlaceCount={(profile?.hidden_restaurants ?? []).length}
                 onRoomCodeChange={setRoomCodeInput}
                 onHost={handleHostRoom}
                 onJoin={handleJoinRoom}
-                onOpenHiddenPlaces={() => setScreen("hidden_places")}
               />
             ) : null}
 
@@ -1727,6 +1781,21 @@ export function FoodMatchApp() {
               />
             ) : null}
           </div>
+
+          {undoHidePlace ? (
+            <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-[60] flex items-center justify-between gap-3 rounded-2xl border border-white/12 bg-[#1b1720]/95 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,0.4)] backdrop-blur-md">
+              <p className="min-w-0 flex-1 truncate text-sm text-white/88">
+                Hidden: <span className="font-semibold text-white">{undoHidePlace.name}</span>
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleUndoHide()}
+                className="shrink-0 rounded-full bg-white px-4 py-2 text-sm font-semibold text-stone-950 transition hover:bg-white/90"
+              >
+                Undo
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </main>
@@ -1740,6 +1809,8 @@ function AppHeader({
   menuRef,
   onToggleMenu,
   onOpenProfile,
+  onOpenHiddenPlaces,
+  hiddenPlaceCount,
   onSignOut,
 }: {
   profile: Profile | null;
@@ -1748,6 +1819,8 @@ function AppHeader({
   menuRef: React.RefObject<HTMLDivElement | null>;
   onToggleMenu: () => void;
   onOpenProfile: () => void;
+  onOpenHiddenPlaces?: () => void;
+  hiddenPlaceCount?: number;
   onSignOut: () => void;
 }) {
   const subtitle =
@@ -1789,10 +1862,24 @@ function AppHeader({
             </button>
 
             {menuOpen ? (
-              <div className="absolute right-0 top-14 z-20 w-44 rounded-2xl border border-white/10 bg-[#1b1720] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
+              <div
+                className={`absolute right-0 top-14 z-20 rounded-2xl border border-white/10 bg-[#1b1720] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.35)] ${onOpenHiddenPlaces ? "w-52" : "w-44"}`}
+              >
                 <button onClick={onOpenProfile} className={menuItemClass}>
                   Profile
                 </button>
+                {onOpenHiddenPlaces ? (
+                  <button
+                    type="button"
+                    onClick={onOpenHiddenPlaces}
+                    className={menuItemClass}
+                  >
+                    Hidden places
+                    {typeof hiddenPlaceCount === "number" && hiddenPlaceCount > 0
+                      ? ` (${hiddenPlaceCount})`
+                      : ""}
+                  </button>
+                ) : null}
                 <button onClick={onSignOut} className={menuItemClass}>
                   Sign out
                 </button>
@@ -1963,8 +2050,7 @@ function HiddenPlacesScreen({
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-0.5">
         {items.length === 0 ? (
           <p className="rounded-2xl border border-white/10 bg-white/6 px-4 py-4 text-sm text-white/55">
-            Nothing hidden yet. While swiping restaurants, use &quot;Delete forever&quot; to remove a place from
-            suggestions.
+            Nothing hidden yet. While swiping, tap &quot;Hide forever&quot; on a card to remove it from suggestions.
           </p>
         ) : (
           items.map((item) => (
@@ -1999,20 +2085,16 @@ function HomeScreen({
   profile,
   roomCodeInput,
   submitting,
-  hiddenPlaceCount,
   onRoomCodeChange,
   onHost,
   onJoin,
-  onOpenHiddenPlaces,
 }: {
   profile: Profile | null;
   roomCodeInput: string;
   submitting: boolean;
-  hiddenPlaceCount: number;
   onRoomCodeChange: (value: string) => void;
   onHost: () => void;
   onJoin: () => void;
-  onOpenHiddenPlaces: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
@@ -2023,34 +2105,6 @@ function HomeScreen({
           <p className="mt-2 text-sm text-white/58">
             {profile?.city}, {profile?.country_code}
           </p>
-
-          <div className="mt-5 flex items-center gap-4 border-t border-white/10 pt-5">
-            <button
-              type="button"
-              onClick={onOpenHiddenPlaces}
-              className="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-white/15 bg-white/8 ring-2 ring-white/10 transition hover:bg-white/12 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70"
-              aria-label="Manage hidden restaurants"
-            >
-              {profile?.avatar_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <div className="grid h-full w-full place-items-center text-lg font-semibold text-white">
-                  {getInitials(profile?.full_name ?? "?")}
-                </div>
-              )}
-            </button>
-            <div className="min-w-0 flex-1 text-left">
-              <p className="text-xs uppercase tracking-[0.18em] text-white/42">Your photo</p>
-              <button
-                type="button"
-                onClick={onOpenHiddenPlaces}
-                className="mt-1 block w-full text-left text-sm font-semibold leading-snug text-orange-200/95 underline decoration-orange-300/40 underline-offset-2 transition hover:text-orange-100"
-              >
-                Hidden from suggestions ({hiddenPlaceCount}) — tap photo or here to restore
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -2331,7 +2385,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
             }}
             className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-20 max-w-[min(92vw,360px)] -translate-x-1/2 rounded-full border border-rose-400/35 bg-rose-500/20 px-4 py-2.5 text-xs font-semibold text-rose-100 shadow-lg backdrop-blur-sm transition hover:bg-rose-500/30"
           >
-            Delete forever — never suggest again
+            Hide forever
           </button>
         ) : null}
         <div
@@ -2514,7 +2568,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
               }}
               className="w-full rounded-xl border border-rose-400/25 bg-rose-500/10 py-2.5 text-center text-xs font-semibold text-rose-100/95 transition hover:bg-rose-500/18"
             >
-              Delete forever — never suggest this place again
+              Hide forever
             </button>
           ) : null}
 
