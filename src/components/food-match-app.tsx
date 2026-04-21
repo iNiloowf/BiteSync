@@ -3194,8 +3194,6 @@ function SwipePanel<T>({
   dragXRef.current = dragX;
 
   const itemKey = swipeItemStableKey(item);
-  const itemKeyRef = useRef(itemKey);
-  itemKeyRef.current = itemKey;
 
   const reset = useCallback(() => {
     gestureItemRef.current = null;
@@ -3203,7 +3201,7 @@ function SwipePanel<T>({
     setDragX(0);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     reset();
   }, [itemKey, reset]);
 
@@ -3213,7 +3211,6 @@ function SwipePanel<T>({
       if (!target) return;
       isDraggingRef.current = true;
       setDragX(direction === "like" ? 560 : -560);
-      const committedKey = swipeItemStableKey(target);
       window.setTimeout(() => {
         void (async () => {
           try {
@@ -3229,13 +3226,6 @@ function SwipePanel<T>({
             isDraggingRef.current = false;
             gestureItemRef.current = null;
           }
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              if (itemKeyRef.current === committedKey) {
-                reset();
-              }
-            });
-          });
         })();
       }, 85);
     },
@@ -3298,9 +3288,9 @@ function SwipePanel<T>({
             reset();
           }}
           onPointerCancel={reset}
-          className="absolute inset-0 z-10 will-change-transform"
+          className="absolute inset-0 z-10 isolate transform-gpu backface-hidden will-change-transform"
           style={{
-            transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)`,
+            transform: `translate3d(${dragX}px,0,0) rotate(${dragX / 18}deg)`,
             transition: "none",
           }}
         >
