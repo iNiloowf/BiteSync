@@ -331,7 +331,8 @@ function mergeRoundRobin(buckets: NormalizedPlace[][], maxTotal: number): Normal
 
 type SearchTextOptions = {
   regionCode?: string;
-  locationRestriction?: {
+  /** `locationRestriction` on SearchText only allows rectangles; circles must use `locationBias`. */
+  locationBias?: {
     circle: { center: LatLng; radius: number };
   };
 };
@@ -345,8 +346,8 @@ async function searchTextPlaces(
   if (options?.regionCode) {
     body.regionCode = options.regionCode;
   }
-  if (options?.locationRestriction) {
-    body.locationRestriction = options.locationRestriction;
+  if (options?.locationBias) {
+    body.locationBias = options.locationBias;
   }
   const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
@@ -406,7 +407,7 @@ export async function GET(request: Request) {
       regionCode,
       ...(geoCenter
         ? {
-            locationRestriction: {
+            locationBias: {
               circle: { center: geoCenter, radius: 52000 },
             },
           }
