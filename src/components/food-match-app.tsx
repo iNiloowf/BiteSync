@@ -15,6 +15,12 @@ type Step = "intro" | "profile" | "room" | "share" | "categories" | "restaurants
 type Role = "host" | "guest";
 type SwipeDecision = "like" | "skip";
 
+type StoredProfile = {
+  name: string;
+  countryCode: string;
+  city: string;
+};
+
 type MenuState = {
   restaurantName: string;
   title: string;
@@ -33,6 +39,7 @@ export function FoodMatchApp() {
   const [name, setName] = useState("Mia");
   const [countryCode, setCountryCode] = useState("US");
   const [city, setCity] = useState("Denver");
+  const [hasSavedProfile, setHasSavedProfile] = useState(false);
   const [roomCode, setRoomCode] = useState("BITE-204");
   const [qrCodeUrl, setQrCodeUrl] = useState("");
   const [categoryIndex, setCategoryIndex] = useState(0);
@@ -54,11 +61,40 @@ export function FoodMatchApp() {
 
   const joinLink = useMemo(
     () =>
-      `https://taste-together.app/join?room=${encodeURIComponent(roomCode)}&city=${encodeURIComponent(
+      `https://bitesync.app/join?room=${encodeURIComponent(roomCode)}&city=${encodeURIComponent(
         city,
       )}`,
     [city, roomCode],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const savedProfileRaw = window.localStorage.getItem("bitesync-profile");
+    if (!savedProfileRaw) return;
+
+    let frameId = 0;
+
+    try {
+      const savedProfile = JSON.parse(savedProfileRaw) as StoredProfile;
+      if (savedProfile.name && savedProfile.countryCode && savedProfile.city) {
+        frameId = window.requestAnimationFrame(() => {
+          setName(savedProfile.name);
+          setCountryCode(savedProfile.countryCode);
+          setCity(savedProfile.city);
+          setHasSavedProfile(true);
+        });
+      }
+    } catch {
+      window.localStorage.removeItem("bitesync-profile");
+    }
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -136,6 +172,15 @@ export function FoodMatchApp() {
       ).padStart(2, "0")}`,
     );
     setStep("room");
+  }
+
+  function saveProfileAndContinue() {
+    if (typeof window !== "undefined") {
+      const profile: StoredProfile = { name, countryCode, city };
+      window.localStorage.setItem("bitesync-profile", JSON.stringify(profile));
+    }
+    setHasSavedProfile(true);
+    moveToRoom();
   }
 
   function registerCategoryDecision(categoryId: string, decision: SwipeDecision) {
@@ -227,7 +272,7 @@ export function FoodMatchApp() {
       <div className="relative mx-auto flex min-h-screen w-full max-w-[560px] px-3 py-3 sm:px-4 sm:py-6">
         <div className="flex w-full flex-col rounded-[32px] border border-white/10 bg-[#0f0d11]/88 shadow-[0_40px_140px_rgba(0,0,0,0.55)] backdrop-blur-xl">
           <div className="flex items-center justify-between px-4 pt-4 text-xs font-semibold uppercase tracking-[0.24em] text-white/45 sm:px-5">
-            <span>Taste Together</span>
+            <span>BiteSync</span>
             <span>{Math.round(progress)}%</span>
           </div>
           <div className="px-4 pt-3 sm:px-5">
@@ -242,13 +287,17 @@ export function FoodMatchApp() {
           <div className="min-h-[100svh] px-4 pb-5 pt-6 sm:min-h-[760px] sm:px-5">
               {step === "intro" ? (
                 <IntroScreen
+                  hasSavedProfile={hasSavedProfile}
+                  name={name}
+                  city={city}
+                  onEditProfile={() => setStep("profile")}
                   onHost={() => {
                     setRole("host");
-                    setStep("profile");
+                    setStep(hasSavedProfile ? "room" : "profile");
                   }}
                   onGuest={() => {
                     setRole("guest");
-                    setStep("profile");
+                    setStep(hasSavedProfile ? "room" : "profile");
                   }}
                 />
               ) : null}
@@ -263,7 +312,7 @@ export function FoodMatchApp() {
                   onNameChange={setName}
                   onCountryChange={handleCountryChange}
                   onCityChange={setCity}
-                  onContinue={moveToRoom}
+                  onContinue={saveProfileAndContinue}
                 />
               ) : null}
 
@@ -346,9 +395,17 @@ export function FoodMatchApp() {
 }
 
 function IntroScreen({
+  hasSavedProfile,
+  name,
+  city,
+  onEditProfile,
   onHost,
   onGuest,
 }: {
+  hasSavedProfile: boolean;
+  name: string;
+  city: string;
+  onEditProfile: () => void;
   onHost: () => void;
   onGuest: () => void;
 }) {
@@ -356,7 +413,7 @@ function IntroScreen({
     <div className="flex h-full flex-col justify-between">
       <div>
         <div className="inline-flex rounded-full border border-white/12 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/75">
-          Swipe-first food app
+          BiteSync
         </div>
         <h1 className="mt-6 text-5xl font-semibold leading-[0.94] text-white">
           Dinner picks.
@@ -364,23 +421,38 @@ function IntroScreen({
           Zero group drama.
         </h1>
         <p className="mt-5 text-base leading-8 text-white/62">
-          Host a room, let everyone join with a QR, swipe food styles, then swipe restaurants like Tinder.
+          Save your profile once, host a room, let everyone join with a QR, then swipe food styles and restaurants like Tinder.
         </p>
       </div>
 
       <div className="space-y-4">
+        {hasSavedProfile ? (
+          <div className="rounded-[28px] border border-white/10 bg-white/6 p-5">
+            <p className="text-sm text-white/55">Signed in as</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{name}</p>
+            <p className="mt-2 text-sm text-white/55">{city}</p>
+            <button onClick={onEditProfile} className="mt-4 text-sm font-semibold text-orange-300">
+              Edit saved profile
+            </button>
+          </div>
+        ) : (
+          <button onClick={onEditProfile} className="w-full rounded-[28px] border border-white/10 bg-white/6 px-5 py-5 text-left">
+            <p className="text-sm text-white/55">First time here?</p>
+            <p className="mt-1 text-2xl font-semibold text-white">Create your simple login</p>
+          </button>
+        )}
         <button
           onClick={onHost}
           className="w-full rounded-[28px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_52%,#8f6bff_100%)] px-5 py-5 text-left shadow-[0_20px_70px_rgba(255,101,101,0.35)]"
         >
-          <p className="text-sm text-white/72">I am creating the room</p>
+          <p className="text-sm text-white/72">{hasSavedProfile ? "Use your saved profile" : "Set up and create a room"}</p>
           <p className="mt-1 text-2xl font-semibold">Continue as host</p>
         </button>
         <button
           onClick={onGuest}
           className="w-full rounded-[28px] border border-white/10 bg-white/6 px-5 py-5 text-left"
         >
-          <p className="text-sm text-white/55">I already have a code</p>
+          <p className="text-sm text-white/55">{hasSavedProfile ? "Join with your saved profile" : "I already have a code"}</p>
           <p className="mt-1 text-2xl font-semibold">Continue as guest</p>
         </button>
       </div>
@@ -411,10 +483,10 @@ function ProfileScreen({
 }) {
   return (
     <ScreenShell
-      title="Where are you tonight?"
-      subtitle="We use your country and city to know which restaurant world to load."
+      title="Create your simple login."
+      subtitle="Save your name, country, and city once so you do not have to type them every time."
       onBack={onBack}
-      actionLabel="Next"
+      actionLabel="Save and continue"
       onAction={onContinue}
     >
       <div className="space-y-4">
