@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 
@@ -840,18 +841,35 @@ export function FoodMatchApp() {
     let active = true;
 
     async function loadMembers() {
-      const { data } = await client
+      const { data, error } = await client
         .from("room_members")
         .select("id,name,joined_at")
         .eq("room_id", roomId)
         .order("joined_at", { ascending: true });
 
-      if (active) {
-        setRoomMembers(((data as RoomMember[] | null) ?? []).filter(Boolean));
+      if (!active) return;
+
+      if (error) {
+        return;
       }
+
+      setRoomMembers(((data as RoomMember[] | null) ?? []).filter(Boolean));
     }
 
     void loadMembers();
+
+    const pollMs = 4000;
+    const pollId = window.setInterval(() => {
+      void loadMembers();
+    }, pollMs);
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void loadMembers();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
 
     const channel = supabase
       .channel(`room-members-${activeRoom.id}`)
@@ -871,6 +889,8 @@ export function FoodMatchApp() {
 
     return () => {
       active = false;
+      window.clearInterval(pollId);
+      document.removeEventListener("visibilitychange", onVisibility);
       void supabase.removeChannel(channel);
     };
   }, [activeRoom, supabase]);
@@ -1521,79 +1541,109 @@ function ProfileScreen({
 }
 
 function RestaurantSwipeCard({ restaurant }: { restaurant: CityRestaurant }) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const photos = restaurant.photoUrls ?? [];
+  const extraPhotos = photos.slice(1);
 
-  return (
-    <div className="flex max-h-[340px] min-h-[260px] flex-col overflow-hidden rounded-[32px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)]">
-      <div className="relative aspect-[16/9] w-full shrink-0 overflow-hidden bg-black/35">
-        {photos[0] ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={photos[0]} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <div className="grid h-full min-h-[120px] place-items-center text-xs text-white/40">No image</div>
-        )}
-      </div>
+  useEffect(() => {
+    if (!lightboxSrc) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [lightboxSrc]);
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] uppercase tracking-[0.28em] text-white/38">Restaurant</p>
-            <h3 className="mt-1.5 text-xl font-semibold leading-snug text-white">{restaurant.name}</h3>
-          </div>
-          <div className="shrink-0 rounded-2xl bg-white/8 px-2.5 py-1.5 text-right">
-            <p className="text-base font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-            <p className="text-[10px] text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-          </div>
-        </div>
-
-        <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
-
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-white/70">
-          <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
-            {restaurant.priceLevel ?? "Price unknown"}
-          </span>
-          <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
-            {restaurant.primaryType ?? "Restaurant"}
-          </span>
-        </div>
-
+  const lightbox =
+    lightboxSrc &&
+    createPortal(
+      <div
+        className="fixed inset-0 z-[240] flex flex-col bg-black/90 p-3 sm:p-5"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Photo"
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            setLightboxSrc(null);
+          }
+        }}
+      >
         <button
           type="button"
           onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setMenuOpen((value) => !value)}
-          className="mt-3 w-full shrink-0 rounded-full border border-white/14 bg-white/10 py-2 text-[11px] font-semibold tracking-wide text-white/90 transition hover:bg-white/14"
+          onClick={() => setLightboxSrc(null)}
+          className="absolute right-3 top-3 z-10 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/90 backdrop-blur-sm transition hover:bg-white/16"
         >
-          {menuOpen ? "Hide menu" : "Show menu"}
+          Close
         </button>
+        <div className="flex min-h-0 flex-1 items-center justify-center pt-10">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={lightboxSrc}
+            alt=""
+            className="max-h-[min(88dvh,920px)] w-auto max-w-[min(96vw,920px)] object-contain"
+            onPointerDown={(event) => event.stopPropagation()}
+          />
+        </div>
+      </div>,
+      document.body,
+    );
 
-        {menuOpen ? (
-          <div className="mt-2 min-h-0 space-y-2" onPointerDown={(event) => event.stopPropagation()}>
-            {photos.length === 0 ? (
-              <p className="text-center text-[11px] text-white/45">No photos from Google for this place yet.</p>
-            ) : (
-              <>
-                <p className="text-[10px] leading-snug text-white/38">
-                  Google Places photos (often include menu shots).
-                </p>
-                <div className="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto pr-0.5">
-                  {photos.map((src, index) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      key={`${restaurant.id}-photo-${index}`}
-                      src={src}
-                      alt=""
-                      className="aspect-[3/4] w-full rounded-lg object-cover"
-                      loading="lazy"
-                    />
-                  ))}
-                </div>
-              </>
-            )}
+  return (
+    <>
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
+        <div className="relative min-h-0 flex-1 overflow-hidden bg-black/35">
+          {photos[0] ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={photos[0]} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full min-h-[32dvh] items-center justify-center text-sm text-white/40">No image</div>
+          )}
+        </div>
+
+        <div className="shrink-0 space-y-2 px-3 pb-3 pt-2 sm:px-4 sm:pb-4 sm:pt-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-white/38">Restaurant</p>
+              <h3 className="mt-1 text-lg font-semibold leading-snug text-white sm:text-xl">{restaurant.name}</h3>
+            </div>
+            <div className="shrink-0 rounded-2xl bg-white/8 px-2.5 py-1.5 text-right">
+              <p className="text-base font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+              <p className="text-[10px] text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+            </div>
           </div>
-        ) : null}
+
+          <p className="line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
+
+          <div className="flex flex-wrap gap-1.5 text-[10px] text-white/70">
+            <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
+              {restaurant.priceLevel ?? "Price unknown"}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
+              {restaurant.primaryType ?? "Restaurant"}
+            </span>
+          </div>
+
+          {extraPhotos.length > 0 ? (
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {extraPhotos.map((src) => (
+                <button
+                  key={src}
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={() => setLightboxSrc(src)}
+                  className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg ring-1 ring-white/20 transition hover:ring-white/45 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/70 sm:h-14 sm:w-14"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
+      {lightbox}
+    </>
   );
 }
 
@@ -1734,6 +1784,7 @@ function RoomScreen({
               </div>
             ) : currentRestaurant ? (
               <SwipePanel
+                fillHeight
                 item={currentRestaurant}
                 nextItem={nextRestaurant}
                 likeLabel="Like"
@@ -1828,7 +1879,12 @@ function RoomScreen({
                 {roomMembers.length > 0 ? (
                   roomMembers.map((member) => (
                     <div key={member.id} className="flex items-center justify-between rounded-2xl bg-white/6 px-4 py-3">
-                      <span className="font-medium text-white">{member.name}</span>
+                      <span className="font-medium text-white">
+                        {member.name}
+                        {room && member.name === room.host_name ? (
+                          <span className="ml-2 text-xs font-normal text-white/45">Host</span>
+                        ) : null}
+                      </span>
                       <span className="text-xs text-white/45">joined</span>
                     </div>
                   ))
@@ -1901,7 +1957,7 @@ function RoomScreen({
 
       {immersive ? (
         <div className="room-swipe-reveal flex min-h-0 flex-1 flex-col overflow-hidden pt-1">
-          <div className="min-h-0 flex-1 overflow-y-auto pb-2">{swipeStages}</div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-2">{swipeStages}</div>
           {(stage === "categories" || stage === "restaurants") &&
           (swipePickLabel || (stage === "categories" && myLikedCategoriesInVoteOrder.length > 0)) ? (
             <div className="shrink-0 max-h-11 overflow-hidden border-t border-white/10 bg-[#141117]/95 px-2 py-1">
@@ -1935,6 +1991,7 @@ function SwipePanel<T>({
   onLike,
   onSkip,
   renderCard,
+  fillHeight = false,
 }: {
   item: T;
   nextItem: T | null;
@@ -1943,6 +2000,7 @@ function SwipePanel<T>({
   onLike: () => void;
   onSkip: () => void;
   renderCard: (item: T) => React.ReactNode;
+  fillHeight?: boolean;
 }) {
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -1969,10 +2027,20 @@ function SwipePanel<T>({
   );
 
   return (
-    <div className="space-y-4">
-      <div className="relative h-[340px] touch-none select-none">
+    <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : "space-y-4"}>
+      <div
+        className={fillHeight ? "relative min-h-0 flex-1 touch-none select-none" : "relative h-[340px] touch-none select-none"}
+      >
         {nextItem ? (
-          <div className="absolute inset-x-3 top-3 scale-[0.96] opacity-45">{renderCard(nextItem)}</div>
+          <div
+            className={
+              fillHeight
+                ? "pointer-events-none absolute inset-2 z-0 overflow-hidden opacity-40 sm:inset-3"
+                : "absolute inset-x-3 top-3 scale-[0.96] opacity-45"
+            }
+          >
+            <div className={fillHeight ? "h-full min-h-0" : ""}>{renderCard(nextItem)}</div>
+          </div>
         ) : null}
 
         <div
@@ -1996,16 +2064,16 @@ function SwipePanel<T>({
             reset();
           }}
           onPointerCancel={reset}
-          className="absolute inset-0 will-change-transform"
+          className="absolute inset-0 z-10 will-change-transform"
           style={{
             transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)`,
             transition: dragging ? "none" : "transform 160ms ease-out",
           }}
         >
-          <div className="relative h-full">
+          <div className={`relative h-full ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
             {Math.abs(dragX) > 18 ? (
               <div
-                className={`absolute left-4 top-4 z-10 rounded-full border px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] ${
+                className={`absolute left-3 top-3 z-20 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] sm:left-4 sm:top-4 sm:px-4 sm:py-2 sm:text-xs ${
                   dragX > 0
                     ? "border-emerald-300/50 bg-emerald-300/14 text-emerald-200"
                     : "border-rose-300/50 bg-rose-300/14 text-rose-200"
