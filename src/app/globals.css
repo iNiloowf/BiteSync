@@ -75,8 +75,8 @@ select {
 
 @keyframes bitesync-swipe-promote {
   from {
-    opacity: 0.88;
-    transform: scale(0.93) translateY(10px);
+    opacity: 0.92;
+    transform: scale(0.96) translateY(6px);
   }
   to {
     opacity: 1;
@@ -85,7 +85,7 @@ select {
 }
 
 .bitesync-swipe-promote {
-  animation: bitesync-swipe-promote 0.26s cubic-bezier(0.25, 0.9, 0.32, 1) both;
+  animation: bitesync-swipe-promote 0.14s cubic-bezier(0.33, 1, 0.32, 1) both;
 }
 
 @media (prefers-reduced-motion: reduce) {

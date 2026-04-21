@@ -1045,59 +1045,90 @@ export function FoodMatchApp() {
   async function handleRestaurantDecision(restaurantId: string, decision: "like" | "skip") {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
 
-    try {
-      const alreadyVoted = restaurantVotes.some(
-        (vote) =>
-          vote.restaurant_id === restaurantId &&
-          (vote.user_id === currentUserId ||
-            (vote.user_id == null && vote.member_name === profile.full_name)),
+    const alreadyVoted = restaurantVotes.some(
+      (vote) =>
+        vote.restaurant_id === restaurantId &&
+        (vote.user_id === currentUserId ||
+          (vote.user_id == null && vote.member_name === profile.full_name)),
+    );
+
+    const optimisticId = `local-rest-${restaurantId}-${Date.now()}`;
+    const optimistic: RoomRestaurantVote = {
+      id: optimisticId,
+      user_id: currentUserId,
+      member_name: profile.full_name,
+      restaurant_id: restaurantId,
+      decision,
+    };
+
+    if (!alreadyVoted) {
+      setRestaurantVotes((prev) => {
+        if (
+          prev.some(
+            (vote) =>
+              vote.restaurant_id === restaurantId &&
+              (vote.user_id === currentUserId ||
+                (vote.user_id == null && vote.member_name === profile.full_name)),
+          )
+        ) {
+          return prev;
+        }
+
+        return [...prev, optimistic];
+      });
+    }
+
+    const place =
+      visibleCityRestaurants.find((r) => r.id === restaurantId) ??
+      restaurantCandidates.find((r) => r.id === restaurantId);
+    setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${place?.name ?? restaurantId}`);
+
+    if (alreadyVoted) {
+      const myIds = new Set(
+        restaurantVotes
+          .filter(
+            (vote) =>
+              vote.user_id === currentUserId ||
+              (vote.user_id == null && vote.member_name === profile.full_name),
+          )
+          .map((v) => v.restaurant_id),
       );
-
-      if (!alreadyVoted) {
-        const insertError = await insertRestaurantVote({
-          room_id: activeRoom.id,
-          user_id: currentUserId,
-          member_name: profile.full_name,
-          restaurant_id: restaurantId,
-          decision,
-        });
-
-        if (insertError) throw insertError;
-
-        const optimistic: RoomRestaurantVote = {
-          id: `local-rest-${restaurantId}-${Date.now()}`,
-          user_id: currentUserId,
-          member_name: profile.full_name,
-          restaurant_id: restaurantId,
-          decision,
-        };
-
-        setRestaurantVotes((prev) => {
-          if (
-            prev.some(
-              (vote) =>
-                vote.restaurant_id === restaurantId &&
-                (vote.user_id === currentUserId ||
-                  (vote.user_id == null && vote.member_name === profile.full_name)),
-            )
-          ) {
-            return prev;
-          }
-
-          return [...prev, optimistic];
-        });
-      }
-
-      const place =
-        visibleCityRestaurants.find((r) => r.id === restaurantId) ??
-        restaurantCandidates.find((r) => r.id === restaurantId);
-      setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${place?.name ?? restaurantId}`);
-
-      const remaining = pendingRestaurants.filter((restaurant) => restaurant.id !== restaurantId);
+      const remaining = restaurantCandidates.filter((r) => !myIds.has(r.id));
       if (remaining.length === 0) {
         setRoomStage("final");
       }
+      return;
+    }
+
+    try {
+      const insertError = await insertRestaurantVote({
+        room_id: activeRoom.id,
+        user_id: currentUserId,
+        member_name: profile.full_name,
+        restaurant_id: restaurantId,
+        decision,
+      });
+
+      if (insertError) throw insertError;
+
+      setRestaurantVotes((prev) => {
+        const myIds = new Set(
+          prev
+            .filter(
+              (vote) =>
+                vote.user_id === currentUserId ||
+                (vote.user_id == null && vote.member_name === profile.full_name),
+            )
+            .map((v) => v.restaurant_id),
+        );
+        const remaining = restaurantCandidates.filter((r) => !myIds.has(r.id));
+        if (remaining.length === 0) {
+          queueMicrotask(() => setRoomStage("final"));
+        }
+        return prev;
+      });
     } catch (error) {
+      setRestaurantVotes((prev) => prev.filter((v) => v.id !== optimisticId));
       setMessage(getErrorMessage(error, "Could not save your restaurant vote."));
       throw error;
     }
@@ -3194,7 +3225,7 @@ function SwipePanel<T>({
             });
           });
         })();
-      }, 200);
+      }, 85);
     },
     [onLike, onSkip, reset],
   );
@@ -3219,8 +3250,8 @@ function SwipePanel<T>({
             <div
               className={
                 fillHeight
-                  ? "h-full min-h-0 origin-[center_92%] scale-[0.93] opacity-[0.48] transition-[transform,opacity] duration-200 ease-out"
-                  : "flex h-full min-h-0 origin-[center_92%] scale-[0.93] items-stretch justify-center opacity-[0.48] transition-[transform,opacity] duration-200 ease-out"
+                  ? "h-full min-h-0 origin-[center_92%] scale-[0.96] opacity-[0.48] transition-[transform,opacity] duration-150 ease-out"
+                  : "flex h-full min-h-0 origin-[center_92%] scale-[0.96] items-stretch justify-center opacity-[0.48] transition-[transform,opacity] duration-150 ease-out"
               }
             >
               {renderCard(nextItem)}
