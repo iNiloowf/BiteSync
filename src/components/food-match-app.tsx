@@ -207,6 +207,7 @@ export function FoodMatchApp() {
   const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
   const [cityRestaurants, setCityRestaurants] = useState<CityRestaurant[]>([]);
   const [restaurantsLoading, setRestaurantsLoading] = useState(false);
+  const [placesFetchNonce, setPlacesFetchNonce] = useState(0);
   const [roomStage, setRoomStage] = useState<RoomStage>("lobby");
   const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
   const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
@@ -477,8 +478,8 @@ export function FoodMatchApp() {
           ? soloLikedCategoryIds
           : [];
 
-    return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}`;
-  }, [activeRoom, roomStage, restaurantFocusCategoryIds, soloLikedCategoryIds, memberCount]);
+    return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}-${placesFetchNonce}`;
+  }, [activeRoom, roomStage, restaurantFocusCategoryIds, soloLikedCategoryIds, memberCount, placesFetchNonce]);
 
   const restaurantCandidates = useMemo(() => {
     const sortByRating = (left: CityRestaurant, right: CityRestaurant) => {
@@ -1294,6 +1295,19 @@ export function FoodMatchApp() {
     setRoomStage(allMembersFinishedCategories ? "category_match" : "waiting_categories");
   }, [activeRoom, roomStage, pendingCategories.length, memberCount, allMembersFinishedCategories]);
 
+  const restaurantFetchContextRef = useRef({
+    roomStage,
+    restaurantFocusCategoryIds,
+    soloLikedCategoryIds,
+    memberCount,
+  });
+  restaurantFetchContextRef.current = {
+    roomStage,
+    restaurantFocusCategoryIds,
+    soloLikedCategoryIds,
+    memberCount,
+  };
+
   useEffect(() => {
     if (!activeRoom) {
       return;
@@ -1303,16 +1317,18 @@ export function FoodMatchApp() {
     const controller = new AbortController();
     const roomCity = activeRoom.city;
     const roomCountry = activeRoom.country_code;
-    const enrich =
-      roomStage === "restaurants" || roomStage === "final" || roomStage === "category_match";
-    const focusIds =
-      restaurantFocusCategoryIds.length > 0
-        ? restaurantFocusCategoryIds
-        : memberCount <= 1
-          ? soloLikedCategoryIds
-          : [];
 
     async function loadRestaurants() {
+      const ctx = restaurantFetchContextRef.current;
+      const enrich =
+        ctx.roomStage === "restaurants" || ctx.roomStage === "final" || ctx.roomStage === "category_match";
+      const focusIds =
+        ctx.restaurantFocusCategoryIds.length > 0
+          ? ctx.restaurantFocusCategoryIds
+          : ctx.memberCount <= 1
+            ? ctx.soloLikedCategoryIds
+            : [];
+
       setRestaurantsLoading(true);
       try {
         const params = new URLSearchParams({
@@ -1340,7 +1356,27 @@ export function FoodMatchApp() {
           return;
         }
 
-        setCityRestaurants(payload.places ?? []);
+        let places = payload.places ?? [];
+
+        if (enrich && focusIds.length > 0 && places.length === 0 && !controller.signal.aborted) {
+          const fallbackParams = new URLSearchParams({
+            city: roomCity,
+            country: roomCountry,
+          });
+          const fallbackRes = await fetch(`/api/restaurants?${fallbackParams.toString()}`, {
+            signal: controller.signal,
+          });
+          const fallbackPayload = (await fallbackRes.json()) as {
+            places?: CityRestaurant[];
+            error?: string;
+          };
+          if (fallbackRes.ok) {
+            places = fallbackPayload.places ?? [];
+          }
+        }
+
+        if (!active) return;
+        setCityRestaurants(places);
       } catch (error) {
         if (!active || controller.signal.aborted) return;
         setMessage(getErrorMessage(error, "Could not load restaurants."));
@@ -1357,8 +1393,6 @@ export function FoodMatchApp() {
       active = false;
       controller.abort();
     };
-    // `diningPlacesFetchKey` encodes roomStage + category focus for fetch timing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoom, diningPlacesFetchKey]);
 
   if (loading) {
@@ -1480,6 +1514,7 @@ export function FoodMatchApp() {
                 pendingRestaurants={pendingRestaurants}
                 finalRestaurants={finalRestaurants}
                 restaurantsLoading={restaurantsLoading}
+                loadedPlaceCount={visibleCityRestaurants.length}
                 swipePickLabel={swipePickLabel}
                 myLikedCategoriesInVoteOrder={myLikedCategoriesInVoteOrder}
                 onStart={() => setRoomStage("categories")}
@@ -1487,6 +1522,7 @@ export function FoodMatchApp() {
                 onStartRestaurantRound={() => setRoomStage("restaurants")}
                 onCategoryDecision={handleCategoryDecision}
                 onRestaurantDecision={handleRestaurantDecision}
+                onRetryPlaces={() => setPlacesFetchNonce((n) => n + 1)}
                 onBack={() => {
                   setSwipePickLabel("");
                   setScreen("home");
@@ -1981,6 +2017,7 @@ function RoomScreen({
   pendingRestaurants,
   finalRestaurants,
   restaurantsLoading,
+  loadedPlaceCount,
   swipePickLabel,
   myLikedCategoriesInVoteOrder,
   onStart,
@@ -1988,6 +2025,7 @@ function RoomScreen({
   onStartRestaurantRound,
   onCategoryDecision,
   onRestaurantDecision,
+  onRetryPlaces,
   onBack,
 }: {
   room: RoomRecord | null;
@@ -2003,6 +2041,7 @@ function RoomScreen({
   pendingRestaurants: CityRestaurant[];
   finalRestaurants: CityRestaurant[];
   restaurantsLoading: boolean;
+  loadedPlaceCount: number;
   swipePickLabel: string;
   myLikedCategoriesInVoteOrder: Category[];
   onStart: () => void;
@@ -2010,6 +2049,7 @@ function RoomScreen({
   onStartRestaurantRound: () => void;
   onCategoryDecision: (categoryId: string, decision: "like" | "skip") => void;
   onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void;
+  onRetryPlaces: () => void;
   onBack: () => void;
 }) {
   const currentCategory = pendingCategories[0] ?? null;
@@ -2157,6 +2197,17 @@ function RoomScreen({
             {restaurantsLoading ? (
               <div className="rounded-2xl bg-white/6 px-3 py-2 text-center text-[11px] text-white/50">
                 Loading {room?.city}…
+              </div>
+            ) : loadedPlaceCount === 0 ? (
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/8 p-4 text-center">
+                <p className="text-sm font-medium text-white/88">No places loaded for {room?.city}</p>
+                <p className="mt-2 text-xs leading-relaxed text-white/55">
+                  The server needs a valid Google Maps key, or the search returned no results. You can retry the
+                  fetch.
+                </p>
+                <button type="button" onClick={onRetryPlaces} className={`${primaryButtonCompactClass} mt-4`}>
+                  Retry
+                </button>
               </div>
             ) : currentRestaurant ? (
               <SwipePanel
@@ -2350,6 +2401,14 @@ function RoomScreen({
   );
 }
 
+function swipeItemStableKey(item: unknown): string {
+  if (item && typeof item === "object" && "id" in item) {
+    const id = (item as { id: unknown }).id;
+    if (typeof id === "string" || typeof id === "number") return String(id);
+  }
+  return "";
+}
+
 function SwipePanel<T>({
   item,
   nextItem,
@@ -2373,12 +2432,22 @@ function SwipePanel<T>({
   const [dragging, setDragging] = useState(false);
   const startXRef = useRef(0);
   const gestureItemRef = useRef<T | null>(null);
+  const isDraggingRef = useRef(false);
+  const dragXRef = useRef(0);
+  dragXRef.current = dragX;
+
+  const itemKey = swipeItemStableKey(item);
 
   const reset = useCallback(() => {
     gestureItemRef.current = null;
+    isDraggingRef.current = false;
     setDragX(0);
     setDragging(false);
   }, []);
+
+  useEffect(() => {
+    reset();
+  }, [itemKey, reset]);
 
   const commit = useCallback(
     (direction: "like" | "skip") => {
@@ -2406,11 +2475,19 @@ function SwipePanel<T>({
           <div
             className={
               fillHeight
-                ? "pointer-events-none absolute inset-2 z-0 overflow-hidden opacity-40 sm:inset-3"
-                : "absolute inset-x-3 top-3 scale-[0.96] opacity-45"
+                ? "pointer-events-none absolute inset-2 z-0 overflow-hidden rounded-[28px] opacity-40 sm:inset-3"
+                : "pointer-events-none absolute inset-2 z-0 overflow-hidden rounded-[28px] opacity-40 sm:inset-3"
             }
           >
-            <div className={fillHeight ? "h-full min-h-0" : ""}>{renderCard(nextItem)}</div>
+            <div
+              className={
+                fillHeight
+                  ? "h-full min-h-0 origin-top scale-[0.96]"
+                  : "flex h-full min-h-0 origin-top scale-[0.96] items-stretch justify-center"
+              }
+            >
+              {renderCard(nextItem)}
+            </div>
           </div>
         ) : null}
 
@@ -2418,18 +2495,30 @@ function SwipePanel<T>({
           onPointerDown={(event) => {
             gestureItemRef.current = item;
             startXRef.current = event.clientX;
+            isDraggingRef.current = true;
             setDragging(true);
+            try {
+              event.currentTarget.setPointerCapture(event.pointerId);
+            } catch {
+              /* ignore */
+            }
           }}
           onPointerMove={(event) => {
-            if (!dragging) return;
+            if (!isDraggingRef.current) return;
             setDragX(event.clientX - startXRef.current);
           }}
-          onPointerUp={() => {
-            if (dragX > 90) {
+          onPointerUp={(event) => {
+            try {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            } catch {
+              /* ignore */
+            }
+            const x = dragXRef.current;
+            if (x > 90) {
               commit("like");
               return;
             }
-            if (dragX < -90) {
+            if (x < -90) {
               commit("skip");
               return;
             }
