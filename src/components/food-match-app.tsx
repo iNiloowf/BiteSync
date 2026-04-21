@@ -1980,6 +1980,24 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 
           <p className="line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
 
+          {restaurant.categoryIds.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {restaurant.categoryIds.map((cid) => {
+                const cat = categories.find((c) => c.id === cid);
+                if (!cat) return null;
+                return (
+                  <span
+                    key={cid}
+                    className="inline-flex items-center gap-0.5 rounded-full border border-emerald-400/20 bg-emerald-400/8 px-2 py-0.5 text-[10px] font-medium text-emerald-100/90"
+                  >
+                    <span className="leading-none">{cat.emoji}</span>
+                    {cat.title}
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap gap-1.5 text-[10px] text-white/70">
             <span className="rounded-full border border-white/10 bg-white/6 px-2 py-1">
               {restaurant.priceLevel ?? "Price unknown"}
@@ -2011,7 +2029,10 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
     </>
   );
 },
-(prev, next) => prev.restaurant.id === next.restaurant.id && prev.heroImagePriority === next.heroImagePriority);
+(prev, next) =>
+  prev.restaurant.id === next.restaurant.id &&
+  prev.heroImagePriority === next.heroImagePriority &&
+  prev.restaurant.categoryIds.join(",") === next.restaurant.categoryIds.join(","));
 
 const CategorySwipeCard = memo(function CategorySwipeCardInner({ category }: { category: Category }) {
   return (
@@ -2281,6 +2302,29 @@ function RoomScreen({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-0.5 pb-2">
             <div className="space-y-4">
+              <div className="sticky top-0 z-10 -mx-0.5 mb-1 flex items-center gap-2 border-b border-white/10 bg-[#141117]/96 px-1 py-2 backdrop-blur-md">
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/12 bg-white/8 text-white/90 transition hover:bg-white/14"
+                  aria-label="Back to home"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
+                    <path
+                      d="M15 18l-6-6 6-6"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white">Final picks</p>
+                  <p className="text-[10px] text-white/45">Tap ← to leave the room</p>
+                </div>
+              </div>
+
               <div className="rounded-2xl bg-white/6 p-4">
                 <p className="text-lg font-semibold text-white">{"Everyone's picks"}</p>
                 <p className="mt-2 text-sm leading-6 text-white/58">
@@ -2312,8 +2356,8 @@ function RoomScreen({
                 )}
               </div>
 
-              <button type="button" onClick={() => onChangeStage("restaurants")} className={ghostButtonClass}>
-                Back to restaurant cards
+              <button type="button" onClick={onBack} className={ghostButtonClass}>
+                Done — back to home
               </button>
             </div>
           </div>
@@ -2475,7 +2519,6 @@ function SwipePanel<T>({
   fillHeight?: boolean;
 }) {
   const [dragX, setDragX] = useState(0);
-  const [dragging, setDragging] = useState(false);
   const startXRef = useRef(0);
   const gestureItemRef = useRef<T | null>(null);
   const isDraggingRef = useRef(false);
@@ -2488,7 +2531,6 @@ function SwipePanel<T>({
     gestureItemRef.current = null;
     isDraggingRef.current = false;
     setDragX(0);
-    setDragging(false);
   }, []);
 
   useEffect(() => {
@@ -2499,15 +2541,16 @@ function SwipePanel<T>({
     (direction: "like" | "skip") => {
       const target = gestureItemRef.current;
       if (!target) return;
-      setDragX(direction === "like" ? 420 : -420);
+      isDraggingRef.current = true;
+      setDragX(direction === "like" ? 560 : -560);
       window.setTimeout(() => {
-        reset();
         if (direction === "like") {
           onLike(target);
         } else {
           onSkip(target);
         }
-      }, 88);
+        reset();
+      }, 110);
     },
     [onLike, onSkip, reset],
   );
@@ -2544,7 +2587,6 @@ function SwipePanel<T>({
             gestureItemRef.current = item;
             startXRef.current = event.clientX;
             isDraggingRef.current = true;
-            setDragging(true);
             try {
               event.currentTarget.setPointerCapture(event.pointerId);
             } catch {
@@ -2576,7 +2618,7 @@ function SwipePanel<T>({
           className="absolute inset-0 z-10 will-change-transform"
           style={{
             transform: `translateX(${dragX}px) rotate(${dragX / 18}deg)`,
-            transition: dragging ? "none" : "transform 110ms ease-out",
+            transition: "none",
           }}
         >
           <div className={`relative h-full ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>

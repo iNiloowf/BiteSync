@@ -47,15 +47,39 @@ const categoryMatchers: Array<{ id: string; patterns: RegExp[] }> = [
   },
   {
     id: "sushi",
-    patterns: [/sushi/i, /japanese/i, /ramen/i],
+    patterns: [/sushi/i, /sashimi/i, /izakaya/i, /ramen/i, /japanese/i],
   },
   {
     id: "mexican",
-    patterns: [/mexican/i, /taco/i],
+    patterns: [/mexican/i, /taco/i, /burrito/i, /tex[_\s-]?mex/i],
   },
   {
     id: "healthy",
-    patterns: [/vegan/i, /vegetarian/i, /salad/i, /healthy/i, /poke/i],
+    patterns: [/vegan/i, /vegetarian/i, /salad/i, /healthy/i, /poke/i, /acai/i],
+  },
+  {
+    id: "seafood",
+    patterns: [/seafood/i, /oyster/i, /lobster/i, /clam/i, /crab/i, /fish[_\s-]?market/i],
+  },
+  {
+    id: "indian",
+    patterns: [/indian/i, /biryani/i, /tandoor/i, /masala/i, /dosa/i, /naan/i],
+  },
+  {
+    id: "thai",
+    patterns: [/thai/i, /pad[_\s-]?thai/i, /tom[_\s-]?yum/i],
+  },
+  {
+    id: "korean",
+    patterns: [/korean/i, /bibimbap/i, /kimchi/i, /kbbq/i],
+  },
+  {
+    id: "cafe",
+    patterns: [/cafe/i, /coffee/i, /bakery/i, /boulangerie/i, /patisserie/i, /tea_house/i, /brunch/i, /espresso/i],
+  },
+  {
+    id: "bbq",
+    patterns: [/barbec/i, /bbq/i, /smokehouse/i, /smoked/i, /steakhouse/i, /grill[_\s-]?restaurant/i],
   },
 ];
 
@@ -79,9 +103,10 @@ function formatPriceLevel(value?: string) {
 }
 
 function inferCategoryIds(typeParts: string[]) {
-  return categoryMatchers
+  const matched = categoryMatchers
     .filter(({ patterns }) => patterns.some((pattern) => typeParts.some((part) => pattern.test(part))))
     .map(({ id }) => id);
+  return [...new Set(matched)];
 }
 
 type GooglePlace = {
@@ -110,10 +135,17 @@ type NormalizedPlace = {
 };
 
 function normalizePlace(place: GooglePlace): NormalizedPlace {
+  const displayName = place.displayName?.text ?? "";
+  const primary = place.primaryType ?? "";
+  const types = place.types ?? [];
   const typeParts = [
-    place.primaryType ?? "",
+    displayName,
+    displayName.toLowerCase().replace(/\s+/g, "_"),
+    primary,
+    primary.replace(/_/g, " "),
     place.primaryTypeDisplayName?.text ?? "",
-    ...(place.types ?? []),
+    ...types,
+    ...types.map((t) => t.replace(/_/g, " ").toLowerCase()),
   ].filter(Boolean);
 
   const photoUrls = (place.photos ?? [])
@@ -150,6 +182,18 @@ function textQueryForLikedCategory(categoryId: string, label: string, city: stri
       return `Mexican tacos and burrito restaurants in ${where}`;
     case "healthy":
       return `Healthy salad bowls vegan vegetarian restaurants in ${where}`;
+    case "seafood":
+      return `Seafood fish oyster lobster restaurants in ${where}`;
+    case "indian":
+      return `Indian curry tandoori restaurants in ${where}`;
+    case "thai":
+      return `Thai restaurants pad thai curry in ${where}`;
+    case "korean":
+      return `Korean BBQ bibimbap restaurants in ${where}`;
+    case "cafe":
+      return `Coffee shops cafes bakeries brunch in ${where}`;
+    case "bbq":
+      return `BBQ barbecue smokehouse grill restaurants in ${where}`;
     default:
       return `Popular ${label} restaurants in ${where}`;
   }
