@@ -1,5 +1,4 @@
--- Let room members OR the room host (profile.full_name = rooms.host_name) advance flow_stage.
--- SECURITY DEFINER update bypasses rooms RLS after we verify inside the function.
+-- If you already ran an older 20260422143000, run this to allow hosts via rooms.host_name (same as app isRoomHost).
 
 create or replace function public.set_room_flow_stage(p_room_id uuid, p_flow_stage text)
 returns void

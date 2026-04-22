@@ -328,12 +328,21 @@ function broadcastRoomFlowEvent(client: SupabaseBrowser, roomId: string, event: 
   });
 }
 
+type PersistRoomFlowResult = { ok: true } | { ok: false; reason: string };
+
 async function persistRoomFlowStage(
   client: SupabaseBrowser,
   roomId: string,
   stage: RoomSyncFlowStage,
-): Promise<boolean> {
-  // Added by migration 20260422143000; project has no generated Database types for RPC.
+): Promise<PersistRoomFlowResult> {
+  const roomsUpdate = client.from("rooms") as unknown as {
+    update: (row: { flow_stage: RoomSyncFlowStage }) => {
+      eq: (column: string, value: string) => Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const { error: updateError } = await roomsUpdate.update({ flow_stage: stage }).eq("id", roomId);
+  if (!updateError) return { ok: true };
+
   const rpcResult = await (
     client as unknown as {
       rpc: (
@@ -342,15 +351,12 @@ async function persistRoomFlowStage(
       ) => Promise<{ error: { message?: string } | null }>;
     }
   ).rpc("set_room_flow_stage", { p_room_id: roomId, p_flow_stage: stage });
-  if (!rpcResult.error) return true;
+  if (!rpcResult.error) return { ok: true };
 
-  const roomsUpdate = client.from("rooms") as unknown as {
-    update: (row: { flow_stage: RoomSyncFlowStage }) => {
-      eq: (column: string, value: string) => Promise<{ error: { message?: string } | null }>;
-    };
-  };
-  const { error } = await roomsUpdate.update({ flow_stage: stage }).eq("id", roomId);
-  return !error;
+  const reason = [updateError?.message, rpcResult.error?.message]
+    .filter((m): m is string => Boolean(m && m.trim()))
+    .join(" · ");
+  return { ok: false, reason: reason || "Database rejected the update." };
 }
 
 export function FoodMatchApp() {
@@ -1049,9 +1055,11 @@ export function FoodMatchApp() {
     setRoomStage("categories");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
-      void persistRoomFlowStage(supabase, roomId, "categories").then((ok) => {
-        if (!ok) {
-          setMessage("Could not sync room for other players. Run Supabase migration 20260422143000 (set_room_flow_stage).");
+      void persistRoomFlowStage(supabase, roomId, "categories").then((r) => {
+        if (!r.ok) {
+          setMessage(
+            `Could not sync room for other players: ${r.reason}. In Supabase SQL Editor run migrations 20260422143000 and 20260423120000 (set_room_flow_stage + host_name policy).`,
+          );
         }
       });
       broadcastRoomFlowEvent(supabase, roomId, "categories_started");
@@ -1063,9 +1071,11 @@ export function FoodMatchApp() {
     setRoomStage("restaurants");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
-      void persistRoomFlowStage(supabase, roomId, "restaurants").then((ok) => {
-        if (!ok) {
-          setMessage("Could not sync room for other players. Run Supabase migration 20260422143000 (set_room_flow_stage).");
+      void persistRoomFlowStage(supabase, roomId, "restaurants").then((r) => {
+        if (!r.ok) {
+          setMessage(
+            `Could not sync room for other players: ${r.reason}. In Supabase SQL Editor run migrations 20260422143000 and 20260423120000 (set_room_flow_stage + host_name policy).`,
+          );
         }
       });
       broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");

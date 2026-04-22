@@ -39,6 +39,12 @@ create policy "Room members can update room flow"
           )
         )
     )
+    or exists (
+      select 1
+      from public.profiles p
+      where p.id = auth.uid()
+        and lower(trim(p.full_name)) = lower(trim(rooms.host_name))
+    )
   )
   with check (
     exists (
@@ -57,6 +63,12 @@ create policy "Room members can update room flow"
             )
           )
         )
+    )
+    or exists (
+      select 1
+      from public.profiles p
+      where p.id = auth.uid()
+        and lower(trim(p.full_name)) = lower(trim(rooms.host_name))
     )
   );
 

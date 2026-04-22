@@ -68,27 +68,39 @@ begin
     raise exception 'invalid flow_stage';
   end if;
 
-  select exists (
-    select 1
-    from public.room_members m
-    where m.room_id = p_room_id
-      and (
-        m.user_id = auth.uid()
-        or (
-          m.user_id is null
-          and exists (
-            select 1
-            from public.profiles p
-            where p.id = auth.uid()
-              and lower(trim(p.full_name)) = lower(trim(m.name))
+  select
+    exists (
+      select 1
+      from public.room_members m
+      where m.room_id = p_room_id
+        and (
+          m.user_id = auth.uid()
+          or (
+            m.user_id is null
+            and exists (
+              select 1
+              from public.profiles p
+              where p.id = auth.uid()
+                and lower(trim(p.full_name)) = lower(trim(m.name))
+            )
           )
         )
-      )
-  )
+    )
+    or exists (
+      select 1
+      from public.rooms r
+      where r.id = p_room_id
+        and exists (
+          select 1
+          from public.profiles p
+          where p.id = auth.uid()
+            and lower(trim(p.full_name)) = lower(trim(r.host_name))
+        )
+    )
   into is_member;
 
   if not coalesce(is_member, false) then
-    raise exception 'not a room member';
+    raise exception 'not allowed to update this room flow';
   end if;
 
   update public.rooms
@@ -136,6 +148,12 @@ create policy "Room members can update room flow"
           )
         )
     )
+    or exists (
+      select 1
+      from public.profiles p
+      where p.id = auth.uid()
+        and lower(trim(p.full_name)) = lower(trim(rooms.host_name))
+    )
   )
   with check (
     exists (
@@ -154,6 +172,12 @@ create policy "Room members can update room flow"
             )
           )
         )
+    )
+    or exists (
+      select 1
+      from public.profiles p
+      where p.id = auth.uid()
+        and lower(trim(p.full_name)) = lower(trim(rooms.host_name))
     )
   );
 
