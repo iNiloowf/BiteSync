@@ -143,9 +143,13 @@ type ErrorLike = {
   code?: string;
 };
 
+function normalizedMemberNameKey(name: string): string {
+  return `n:${name.trim().toLowerCase()}`;
+}
+
 function categoryVoteKey(vote: RoomCategoryVote): string {
-  if (vote.user_id) return vote.user_id;
-  if (vote.member_name) return `n:${vote.member_name}`;
+  if (vote.user_id) return String(vote.user_id).trim();
+  if (vote.member_name) return normalizedMemberNameKey(vote.member_name);
   return "";
 }
 
@@ -188,7 +192,41 @@ function mergeRestaurantVotesFromServer(
 }
 
 function roomMemberKey(member: RoomMember): string {
-  return member.user_id ?? `n:${member.name}`;
+  if (member.user_id) return String(member.user_id).trim();
+  return normalizedMemberNameKey(member.name);
+}
+
+/** Same Set may appear under user_id and n:name so progress survives key mismatches across rows vs votes. */
+function buildMemberCategoryProgress(votes: readonly RoomCategoryVote[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const vote of votes) {
+    const primary = categoryVoteKey(vote);
+    if (!primary) continue;
+    let set = map.get(primary);
+    if (!set) {
+      set = new Set<string>();
+      map.set(primary, set);
+    }
+    set.add(vote.category_id);
+    if (vote.user_id && vote.member_name?.trim()) {
+      const alt = normalizedMemberNameKey(vote.member_name);
+      if (alt !== primary) {
+        map.set(alt, set);
+      }
+    }
+  }
+  return map;
+}
+
+function memberCategoryVotesSet(
+  member: RoomMember,
+  progress: ReadonlyMap<string, Set<string>>,
+): Set<string> | undefined {
+  if (member.user_id) {
+    const byId = progress.get(String(member.user_id).trim());
+    if (byId && byId.size > 0) return byId;
+  }
+  return progress.get(normalizedMemberNameKey(member.name));
 }
 
 type SupabaseBrowser = NonNullable<ReturnType<typeof getSupabaseBrowserClient>>;
@@ -204,7 +242,14 @@ function mergeMemberRowsFromServer(serverRows: RoomMember[], previous: RoomMembe
     const key = roomMemberKey(member);
     if (byKey.has(key)) continue;
     if (member.user_id && [...byKey.values()].some((row) => row.user_id === member.user_id)) continue;
-    if (!member.user_id && [...byKey.values()].some((row) => row.name === member.name)) continue;
+    if (
+      !member.user_id &&
+      [...byKey.values()].some(
+        (row) => row.name.trim().toLowerCase() === member.name.trim().toLowerCase(),
+      )
+    ) {
+      continue;
+    }
     byKey.set(key, member);
   }
 
@@ -446,23 +491,13 @@ export function FoodMatchApp() {
 
   const categoryDeckSize = categories.length;
 
-  const memberCategoryProgress = useMemo(() => {
-    const perVoter = new Map<string, Set<string>>();
-    for (const vote of categoryVotes) {
-      const key = categoryVoteKey(vote);
-      if (!key) continue;
-      const set = perVoter.get(key) ?? new Set<string>();
-      set.add(vote.category_id);
-      perVoter.set(key, set);
-    }
-    return perVoter;
-  }, [categoryVotes]);
+  const memberCategoryProgress = useMemo(() => buildMemberCategoryProgress(categoryVotes), [categoryVotes]);
 
   const allMembersFinishedCategories = useMemo(() => {
     if (memberCount <= 1) return true;
     if (visibleRoomMembers.length === 0) return false;
     for (const member of visibleRoomMembers) {
-      const set = memberCategoryProgress.get(roomMemberKey(member));
+      const set = memberCategoryVotesSet(member, memberCategoryProgress);
       if (!set || set.size < categoryDeckSize) return false;
     }
     return true;
@@ -471,7 +506,7 @@ export function FoodMatchApp() {
   const membersStillSwipingCategories = useMemo(() => {
     if (memberCount <= 1) return [] as RoomMember[];
     return visibleRoomMembers.filter((member) => {
-      const set = memberCategoryProgress.get(roomMemberKey(member));
+      const set = memberCategoryVotesSet(member, memberCategoryProgress);
       return !set || set.size < categoryDeckSize;
     });
   }, [memberCount, visibleRoomMembers, memberCategoryProgress, categoryDeckSize]);
@@ -953,19 +988,12 @@ export function FoodMatchApp() {
         return;
       }
 
-      const progress = new Map<string, Set<string>>();
-      for (const vote of votesSnapshot) {
-        const key = categoryVoteKey(vote);
-        if (!key) continue;
-        const set = progress.get(key) ?? new Set<string>();
-        set.add(vote.category_id);
-        progress.set(key, set);
-      }
+      const progress = buildMemberCategoryProgress(votesSnapshot);
 
       const everyoneDone =
         visibleRoomMembers.length > 0 &&
         visibleRoomMembers.every((member) => {
-          const set = progress.get(roomMemberKey(member));
+          const set = memberCategoryVotesSet(member, progress);
           return Boolean(set && set.size >= categoryDeckSize);
         });
 
@@ -1019,19 +1047,12 @@ export function FoodMatchApp() {
         return;
       }
 
-      const progress = new Map<string, Set<string>>();
-      for (const vote of votesSnapshot) {
-        const key = categoryVoteKey(vote);
-        if (!key) continue;
-        const set = progress.get(key) ?? new Set<string>();
-        set.add(vote.category_id);
-        progress.set(key, set);
-      }
+      const progress = buildMemberCategoryProgress(votesSnapshot);
 
       const everyoneDone =
         visibleRoomMembers.length > 0 &&
         visibleRoomMembers.every((member) => {
-          const set = progress.get(roomMemberKey(member));
+          const set = memberCategoryVotesSet(member, progress);
           return Boolean(set && set.size >= categoryDeckSize);
         });
 
