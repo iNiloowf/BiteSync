@@ -537,6 +537,17 @@ export function FoodMatchApp() {
   }, []);
 
   const visibleRoomMembers = activeRoom ? roomMembers : [];
+  const distinctRoomMembers = useMemo(() => {
+    if (!activeRoom) return [] as RoomMember[];
+    const byKey = new Map<string, RoomMember>();
+    for (const member of roomMembers) {
+      const k = roomMemberKey(member);
+      if (!byKey.has(k)) byKey.set(k, member);
+    }
+    return [...byKey.values()].sort(
+      (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime(),
+    );
+  }, [activeRoom, roomMembers]);
   const visibleCityRestaurants = useMemo(
     () => (activeRoom ? cityRestaurants : []),
     [activeRoom, cityRestaurants],
@@ -549,14 +560,14 @@ export function FoodMatchApp() {
   }, [activeRoom?.host_name, profile?.full_name]);
 
   const memberCount = useMemo(() => {
-    if (visibleRoomMembers.length === 0) return 1;
+    if (distinctRoomMembers.length === 0) return 1;
     const distinctUserIds = new Set(
-      visibleRoomMembers.map((m) => m.user_id).filter((id): id is string => Boolean(id)),
+      distinctRoomMembers.map((m) => m.user_id).filter((id): id is string => Boolean(id)),
     );
     if (distinctUserIds.size >= 2) return distinctUserIds.size;
-    const distinctNames = new Set(visibleRoomMembers.map((m) => m.name.trim().toLowerCase()));
+    const distinctNames = new Set(distinctRoomMembers.map((m) => m.name.trim().toLowerCase()));
     return Math.max(distinctNames.size, 1);
-  }, [visibleRoomMembers]);
+  }, [distinctRoomMembers]);
 
   const myCategoryVotes = useMemo(
     () =>
@@ -583,27 +594,35 @@ export function FoodMatchApp() {
     [categoryVotes, memberCount, myCategoryVotes],
   );
 
+  const sharedMatchCategories = useMemo(
+    () =>
+      sharedCategoryIds
+        .map((id) => categories.find((c) => c.id === id))
+        .filter((c): c is Category => Boolean(c)),
+    [sharedCategoryIds],
+  );
+
   const categoryDeckSize = categories.length;
 
   const memberCategoryProgress = useMemo(() => buildMemberCategoryProgress(categoryVotes), [categoryVotes]);
 
   const allMembersFinishedCategories = useMemo(() => {
     if (memberCount <= 1) return true;
-    if (visibleRoomMembers.length === 0) return false;
-    for (const member of visibleRoomMembers) {
+    if (distinctRoomMembers.length === 0) return false;
+    for (const member of distinctRoomMembers) {
       const set = memberCategoryVotesSet(member, memberCategoryProgress);
       if (!set || set.size < categoryDeckSize) return false;
     }
     return true;
-  }, [memberCount, visibleRoomMembers, memberCategoryProgress, categoryDeckSize]);
+  }, [memberCount, distinctRoomMembers, memberCategoryProgress, categoryDeckSize]);
 
   const membersStillSwipingCategories = useMemo(() => {
     if (memberCount <= 1) return [] as RoomMember[];
-    return visibleRoomMembers.filter((member) => {
+    return distinctRoomMembers.filter((member) => {
       const set = memberCategoryVotesSet(member, memberCategoryProgress);
       return !set || set.size < categoryDeckSize;
     });
-  }, [memberCount, visibleRoomMembers, memberCategoryProgress, categoryDeckSize]);
+  }, [memberCount, distinctRoomMembers, memberCategoryProgress, categoryDeckSize]);
 
   const soloLikedCategoryIds = useMemo(
     () => myCategoryVotes.filter((vote) => vote.decision === "like").map((vote) => vote.category_id),
@@ -1107,8 +1126,8 @@ export function FoodMatchApp() {
       const progress = buildMemberCategoryProgress(votesSnapshot);
 
       const everyoneDone =
-        visibleRoomMembers.length > 0 &&
-        visibleRoomMembers.every((member) => {
+        distinctRoomMembers.length > 0 &&
+        distinctRoomMembers.every((member) => {
           const set = memberCategoryVotesSet(member, progress);
           return Boolean(set && set.size >= categoryDeckSize);
         });
@@ -1166,8 +1185,8 @@ export function FoodMatchApp() {
       const progress = buildMemberCategoryProgress(votesSnapshot);
 
       const everyoneDone =
-        visibleRoomMembers.length > 0 &&
-        visibleRoomMembers.every((member) => {
+        distinctRoomMembers.length > 0 &&
+        distinctRoomMembers.every((member) => {
           const set = memberCategoryVotesSet(member, progress);
           return Boolean(set && set.size >= categoryDeckSize);
         });
@@ -1678,6 +1697,45 @@ export function FoodMatchApp() {
   }, [activeRoom, supabase]);
 
   useEffect(() => {
+    if (!supabase || !activeRoom) {
+      return;
+    }
+    if (roomStage !== "waiting_categories" && roomStage !== "categories") {
+      return;
+    }
+    const roomId = activeRoom.id;
+    const client = supabase;
+    const poll = () => {
+      void (async () => {
+        const primary = await client
+          .from("room_category_votes")
+          .select("id,user_id,category_id,decision,member_name")
+          .eq("room_id", roomId)
+          .order("created_at", { ascending: true });
+        if (primary.error) {
+          if (isMissingColumnError(primary.error, "user_id")) {
+            const legacy = await client
+              .from("room_category_votes")
+              .select("id,category_id,decision,member_name")
+              .eq("room_id", roomId)
+              .order("created_at", { ascending: true });
+            if (legacy.error) return;
+            const rows = (legacy.data as Omit<RoomCategoryVote, "user_id">[] | null) ?? [];
+            const normalized = rows.map((row) => ({ ...row, user_id: null as string | null }));
+            setCategoryVotes((prev) => mergeCategoryVotesFromServer(normalized, prev));
+            return;
+          }
+          return;
+        }
+        const rows = ((primary.data as RoomCategoryVote[] | null) ?? []).filter(Boolean);
+        setCategoryVotes((prev) => mergeCategoryVotesFromServer(rows, prev));
+      })();
+    };
+    const pollId = window.setInterval(poll, 2500);
+    return () => window.clearInterval(pollId);
+  }, [activeRoom, supabase, roomStage]);
+
+  useEffect(() => {
     if (roomStage !== "waiting_categories") {
       return;
     }
@@ -1964,9 +2022,10 @@ export function FoodMatchApp() {
                 room={activeRoom}
                 isRoomHost={isRoomHost}
                 stage={roomStage}
-                roomMembers={visibleRoomMembers}
+                roomMembers={distinctRoomMembers}
                 restaurantVotes={restaurantVotes}
                 sharedCategoryIds={sharedCategoryIds}
+                sharedMatchCategories={sharedMatchCategories}
                 restaurantFocusCategories={restaurantFocusCategories}
                 membersStillSwipingCategories={membersStillSwipingCategories}
                 pendingCategories={pendingCategories}
@@ -2834,6 +2893,7 @@ function RoomScreen({
   roomMembers,
   restaurantVotes,
   sharedCategoryIds,
+  sharedMatchCategories,
   restaurantFocusCategories,
   membersStillSwipingCategories,
   pendingCategories,
@@ -2858,6 +2918,7 @@ function RoomScreen({
   roomMembers: RoomMember[];
   restaurantVotes: RoomRestaurantVote[];
   sharedCategoryIds: string[];
+  sharedMatchCategories: Category[];
   restaurantFocusCategories: Category[];
   membersStillSwipingCategories: RoomMember[];
   pendingCategories: typeof categories;
@@ -2936,32 +2997,49 @@ function RoomScreen({
           <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/8 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-100/80">Next step</p>
             <h2 className="mt-2 text-xl font-semibold text-white">
-              {sharedCategoryIds.length > 0 ? "Categories you all liked" : "Categories for this round"}
+              {sharedMatchCategories.length > 0 ? "Styles you both picked" : "Categories for this round"}
             </h2>
             <p className="mt-2 text-sm leading-6 text-white/58">
-              {sharedCategoryIds.length > 0
-                ? "Places below follow these shared picks. Tap Start when everyone is ready to swipe restaurants."
-                : "No single style was liked by everyone, so we combine what people liked to build your deck."}
+              {sharedMatchCategories.length > 0
+                ? "These are the food styles both of you liked. When you are ready, the host starts the restaurant pass."
+                : "No style was liked by both of you, so we will mix everyone’s likes to build the deck below. The host can still start the restaurant round."}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {restaurantFocusCategories.length > 0 ? (
-              restaurantFocusCategories.map((cat) => (
+          {sharedMatchCategories.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {sharedMatchCategories.map((cat) => (
                 <span
                   key={cat.id}
-                  className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/8 px-3 py-1.5 text-sm text-white/90"
+                  className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-3 py-1.5 text-sm text-white/90"
                 >
                   <span>{cat.emoji}</span>
                   {cat.title}
                 </span>
-              ))
-            ) : (
-              <p className="text-sm text-white/50">We will pull a broad set of places for your city.</p>
-            )}
-          </div>
+              ))}
+            </div>
+          ) : null}
+          {restaurantFocusCategories.length > 0 && sharedMatchCategories.length === 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-wide text-white/40">Deck preview (combined likes)</p>
+              <div className="flex flex-wrap gap-2">
+                {restaurantFocusCategories.map((cat) => (
+                  <span
+                    key={cat.id}
+                    className="inline-flex items-center gap-1 rounded-full border border-white/12 bg-white/8 px-3 py-1.5 text-sm text-white/90"
+                  >
+                    <span>{cat.emoji}</span>
+                    {cat.title}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {restaurantFocusCategories.length === 0 && sharedMatchCategories.length === 0 ? (
+            <p className="text-sm text-white/50">We will pull a broad set of places for your city.</p>
+          ) : null}
           {isRoomHost ? (
             <button type="button" onClick={onStartRestaurantRound} className={primaryButtonClass}>
-              Start
+              Start — restaurants
             </button>
           ) : (
             <p className="text-center text-sm text-white/50">Waiting for the host to start the restaurant round.</p>
@@ -3649,9 +3727,12 @@ function getSharedLikedIds<T extends { user_id: string | null; decision: "like" 
   const likedCounts = new Map<string, Set<string>>();
   for (const vote of votes) {
     const itemId = (vote as T & Record<string, string>)[itemKey];
-    const voterKey =
-      vote.user_id ??
-      (typeof vote.member_name === "string" && vote.member_name ? `n:${vote.member_name}` : "");
+    let voterKey = "";
+    if (vote.user_id) {
+      voterKey = String(vote.user_id).trim();
+    } else if (typeof vote.member_name === "string" && vote.member_name.trim()) {
+      voterKey = normalizedMemberNameKey(vote.member_name);
+    }
     if (!itemId || vote.decision !== "like" || !voterKey) continue;
     const users = likedCounts.get(itemId) ?? new Set<string>();
     users.add(voterKey);
