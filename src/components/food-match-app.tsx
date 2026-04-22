@@ -278,6 +278,28 @@ function broadcastRoomMemberJoined(client: SupabaseBrowser, roomId: string, name
   });
 }
 
+type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started";
+
+function broadcastRoomFlowEvent(client: SupabaseBrowser, roomId: string, event: RoomFlowBroadcastEvent) {
+  const channel = client.channel(`room-handshake-${roomId}`);
+  const teardown = () => {
+    window.clearTimeout(failSafe);
+    void client.removeChannel(channel);
+  };
+  const failSafe = window.setTimeout(teardown, 8000);
+  channel.subscribe((status) => {
+    if (status === "SUBSCRIBED") {
+      window.clearTimeout(failSafe);
+      void channel.send({
+        type: "broadcast",
+        event,
+        payload: {},
+      });
+      window.setTimeout(teardown, 1500);
+    }
+  });
+}
+
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -966,6 +988,22 @@ export function FoodMatchApp() {
     }
   }
 
+  const handleHostStartCategories = useCallback(() => {
+    if (roomMode !== "host") return;
+    setRoomStage("categories");
+    if (supabase && activeRoom?.id) {
+      broadcastRoomFlowEvent(supabase, activeRoom.id, "categories_started");
+    }
+  }, [roomMode, supabase, activeRoom?.id]);
+
+  const handleHostStartRestaurantRound = useCallback(() => {
+    if (roomMode !== "host") return;
+    setRoomStage("restaurants");
+    if (supabase && activeRoom?.id) {
+      broadcastRoomFlowEvent(supabase, activeRoom.id, "restaurants_started");
+    }
+  }, [roomMode, supabase, activeRoom?.id]);
+
   async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
 
@@ -1359,6 +1397,14 @@ export function FoodMatchApp() {
           void loadMembers();
         },
       )
+      .on("broadcast", { event: "categories_started" }, () => {
+        if (!active) return;
+        setRoomStage("categories");
+      })
+      .on("broadcast", { event: "restaurants_started" }, () => {
+        if (!active) return;
+        setRoomStage("restaurants");
+      })
       .subscribe();
 
     const channel = supabase
@@ -1818,9 +1864,9 @@ export function FoodMatchApp() {
                 loadedPlaceCount={visibleCityRestaurants.length}
                 swipePickLabel={swipePickLabel}
                 myCategoryVotes={myCategoryVotes}
-                onStart={() => setRoomStage("categories")}
+                onStart={handleHostStartCategories}
                 onChangeStage={setRoomStage}
-                onStartRestaurantRound={() => setRoomStage("restaurants")}
+                onStartRestaurantRound={handleHostStartRestaurantRound}
                 onCategoryBatchSubmit={handleCategoryBatchSubmit}
                 onRestaurantDecision={handleRestaurantDecision}
                 onHideRestaurantForever={hasSupabaseEnv ? hideRestaurantForever : undefined}
@@ -2800,9 +2846,13 @@ function RoomScreen({
               <p className="text-sm text-white/50">We will pull a broad set of places for your city.</p>
             )}
           </div>
-          <button type="button" onClick={onStartRestaurantRound} className={primaryButtonClass}>
-            Start
-          </button>
+          {mode === "host" ? (
+            <button type="button" onClick={onStartRestaurantRound} className={primaryButtonClass}>
+              Start
+            </button>
+          ) : (
+            <p className="text-center text-sm text-white/50">Waiting for the host to start the restaurant round.</p>
+          )}
         </div>
       ) : null}
 
@@ -3083,15 +3133,25 @@ function RoomScreen({
 
               <div className="mt-4 space-y-3">
                 <div className="rounded-2xl bg-white/6 px-3 py-3">
-                  <p className="text-base font-semibold text-white">Start when you are ready.</p>
+                  <p className="text-base font-semibold text-white">
+                    {mode === "host" ? "Start when you are ready." : "Waiting for the host"}
+                  </p>
                   <p className="mt-1.5 text-sm leading-snug text-white/58">
-                    You can begin categories solo; late joiners still share only mutual likes.
+                    {mode === "host"
+                      ? "When you start, everyone in the room moves to category picks together."
+                      : "The host starts the round. Your screen will switch to category picks automatically."}
                   </p>
                 </div>
 
-                <button type="button" onClick={handleStartClick} className={primaryButtonClass}>
-                  Start swiping categories
-                </button>
+                {mode === "host" ? (
+                  <button type="button" onClick={handleStartClick} className={primaryButtonClass}>
+                    Start swiping categories
+                  </button>
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm text-white/55">
+                    Waiting for host to start…
+                  </div>
+                )}
               </div>
             </div>
           </div>
