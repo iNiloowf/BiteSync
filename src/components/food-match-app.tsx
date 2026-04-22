@@ -359,6 +359,14 @@ async function persistRoomFlowStage(
   return { ok: false, reason: reason || "Database rejected the update." };
 }
 
+function formatRoomFlowPersistUserMessage(reason: string) {
+  const head = `Could not sync room for other players: ${reason}.`;
+  if (/flow_stage|schema cache|column .* does not exist|does not exist.*flow_stage/i.test(reason)) {
+    return `${head} Run SQL from supabase/migrations/20260423140000_ensure_rooms_flow_stage_column.sql (adds rooms.flow_stage). Then Supabase Dashboard → Project Settings → API → Reload schema.`;
+  }
+  return `${head} Run SQL from migrations 20260422143000_set_room_flow_stage_rpc.sql and 20260423120000_room_flow_host_name_allowed.sql if policies/RPC are missing.`;
+}
+
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -1056,11 +1064,7 @@ export function FoodMatchApp() {
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
       void persistRoomFlowStage(supabase, roomId, "categories").then((r) => {
-        if (!r.ok) {
-          setMessage(
-            `Could not sync room for other players: ${r.reason}. In Supabase SQL Editor run migrations 20260422143000 and 20260423120000 (set_room_flow_stage + host_name policy).`,
-          );
-        }
+        if (!r.ok) setMessage(formatRoomFlowPersistUserMessage(r.reason));
       });
       broadcastRoomFlowEvent(supabase, roomId, "categories_started");
     }
@@ -1072,11 +1076,7 @@ export function FoodMatchApp() {
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
       void persistRoomFlowStage(supabase, roomId, "restaurants").then((r) => {
-        if (!r.ok) {
-          setMessage(
-            `Could not sync room for other players: ${r.reason}. In Supabase SQL Editor run migrations 20260422143000 and 20260423120000 (set_room_flow_stage + host_name policy).`,
-          );
-        }
+        if (!r.ok) setMessage(formatRoomFlowPersistUserMessage(r.reason));
       });
       broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
     }
