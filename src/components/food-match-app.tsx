@@ -741,13 +741,24 @@ export function FoodMatchApp() {
     [memberCount, myRestaurantVotes, restaurantVotes],
   );
 
-  const finalRestaurants = useMemo(
-    () =>
-      restaurantCandidates
-        .filter((restaurant) => finalRestaurantIds.includes(restaurant.id))
-        .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0)),
-    [finalRestaurantIds, restaurantCandidates],
-  );
+  const finalRestaurants = useMemo(() => {
+    if (finalRestaurantIds.length === 0) return [];
+
+    const byId = new Map<string, CityRestaurant>();
+    for (const r of restaurantCandidates) {
+      byId.set(r.id, r);
+    }
+    for (const r of visibleCityRestaurants) {
+      if (!byId.has(r.id)) {
+        byId.set(r.id, r);
+      }
+    }
+
+    return finalRestaurantIds
+      .map((id) => byId.get(id))
+      .filter((r): r is CityRestaurant => Boolean(r))
+      .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0));
+  }, [finalRestaurantIds, restaurantCandidates, visibleCityRestaurants]);
 
   const loadProfile = useCallback(
     async (user: User) => {
