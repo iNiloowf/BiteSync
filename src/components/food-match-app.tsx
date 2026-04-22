@@ -9,7 +9,6 @@ import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@
 
 type Screen = "auth" | "home" | "profile" | "room" | "hidden_places";
 type AuthMode = "signin" | "signup";
-type RoomMode = "host" | "join";
 type RoomStage =
   | "lobby"
   | "categories"
@@ -313,7 +312,6 @@ export function FoodMatchApp() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [roomMode, setRoomMode] = useState<RoomMode>("host");
   const [activeRoom, setActiveRoom] = useState<RoomRecord | null>(null);
 
   const [email, setEmail] = useState("");
@@ -476,6 +474,12 @@ export function FoodMatchApp() {
     [activeRoom, cityRestaurants],
   );
   const currentUserId = session?.user.id ?? null;
+
+  const isRoomHost = useMemo(() => {
+    if (!activeRoom?.host_name || !profile?.full_name) return false;
+    return profile.full_name.trim().toLowerCase() === activeRoom.host_name.trim().toLowerCase();
+  }, [activeRoom?.host_name, profile?.full_name]);
+
   const memberCount = useMemo(() => {
     if (visibleRoomMembers.length === 0) return 1;
     const distinctUserIds = new Set(
@@ -936,7 +940,6 @@ export function FoodMatchApp() {
       setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
       syncRoomMembers(profile.full_name);
-      setRoomMode("host");
       setScreen("room");
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not create room."));
@@ -974,7 +977,6 @@ export function FoodMatchApp() {
       setActiveRoom(roomData as RoomRecord);
       syncRoomMembers(roomData.host_name);
       syncRoomMembers(profile.full_name);
-      setRoomMode("join");
       setScreen("room");
 
       broadcastRoomMemberJoined(supabase, roomData.id, profile.full_name, session.user.id);
@@ -989,20 +991,20 @@ export function FoodMatchApp() {
   }
 
   const handleHostStartCategories = useCallback(() => {
-    if (roomMode !== "host") return;
+    if (!isRoomHost) return;
     setRoomStage("categories");
     if (supabase && activeRoom?.id) {
       broadcastRoomFlowEvent(supabase, activeRoom.id, "categories_started");
     }
-  }, [roomMode, supabase, activeRoom?.id]);
+  }, [isRoomHost, supabase, activeRoom?.id]);
 
   const handleHostStartRestaurantRound = useCallback(() => {
-    if (roomMode !== "host") return;
+    if (!isRoomHost) return;
     setRoomStage("restaurants");
     if (supabase && activeRoom?.id) {
       broadcastRoomFlowEvent(supabase, activeRoom.id, "restaurants_started");
     }
-  }, [roomMode, supabase, activeRoom?.id]);
+  }, [isRoomHost, supabase, activeRoom?.id]);
 
   async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
@@ -1850,7 +1852,7 @@ export function FoodMatchApp() {
             {screen === "room" ? (
               <RoomScreen
                 room={activeRoom}
-                mode={roomMode}
+                isRoomHost={isRoomHost}
                 stage={roomStage}
                 roomMembers={visibleRoomMembers}
                 restaurantVotes={restaurantVotes}
@@ -2717,7 +2719,7 @@ function roomStageFlowLabel(stage: RoomStage) {
 
 function RoomScreen({
   room,
-  mode,
+  isRoomHost,
   stage,
   roomMembers,
   restaurantVotes,
@@ -2741,7 +2743,7 @@ function RoomScreen({
   onBack,
 }: {
   room: RoomRecord | null;
-  mode: RoomMode;
+  isRoomHost: boolean;
   stage: RoomStage;
   roomMembers: RoomMember[];
   restaurantVotes: RoomRestaurantVote[];
@@ -2785,6 +2787,7 @@ function RoomScreen({
   }, [stage, myCategoryVotes]);
 
   const handleStartClick = () => {
+    if (!isRoomHost) return;
     setEnterSwipe(true);
     window.setTimeout(() => {
       onStart();
@@ -2846,7 +2849,7 @@ function RoomScreen({
               <p className="text-sm text-white/50">We will pull a broad set of places for your city.</p>
             )}
           </div>
-          {mode === "host" ? (
+          {isRoomHost ? (
             <button type="button" onClick={onStartRestaurantRound} className={primaryButtonClass}>
               Start
             </button>
@@ -3089,13 +3092,13 @@ function RoomScreen({
               Back
             </button>
             <span className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs uppercase tracking-[0.24em] text-white/70">
-              {mode === "host" ? "Host mode" : "Joined"}
+              {isRoomHost ? "Host mode" : "Joined"}
             </span>
           </div>
 
           <div className="rounded-[24px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
             <div className="rounded-[23px] bg-[#161218] px-4 py-3">
-              <p className="text-xs text-white/55">{mode === "host" ? "Your room is live" : "You are inside the room"}</p>
+              <p className="text-xs text-white/55">{isRoomHost ? "Your room is live" : "You are inside the room"}</p>
               <h1 className="mt-1.5 text-3xl font-semibold tracking-[0.14em] text-white">{room?.code}</h1>
               <p className="mt-1.5 text-xs text-white/58">
                 {room?.city}, {room?.country_code}
@@ -3134,16 +3137,16 @@ function RoomScreen({
               <div className="mt-4 space-y-3">
                 <div className="rounded-2xl bg-white/6 px-3 py-3">
                   <p className="text-base font-semibold text-white">
-                    {mode === "host" ? "Start when you are ready." : "Waiting for the host"}
+                    {isRoomHost ? "Start when you are ready." : "Waiting for the host"}
                   </p>
                   <p className="mt-1.5 text-sm leading-snug text-white/58">
-                    {mode === "host"
+                    {isRoomHost
                       ? "When you start, everyone in the room moves to category picks together."
                       : "The host starts the round. Your screen will switch to category picks automatically."}
                   </p>
                 </div>
 
-                {mode === "host" ? (
+                {isRoomHost ? (
                   <button type="button" onClick={handleStartClick} className={primaryButtonClass}>
                     Start swiping categories
                   </button>
