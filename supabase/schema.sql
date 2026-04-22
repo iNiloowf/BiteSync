@@ -16,6 +16,7 @@ create table if not exists public.rooms (
   host_name text not null,
   country_code text not null,
   city text not null,
+  flow_stage text not null default 'lobby' check (flow_stage in ('lobby', 'categories', 'restaurants')),
   created_at timestamptz not null default now()
 );
 
@@ -68,6 +69,22 @@ create policy "Rooms are readable" on public.rooms for select using (true);
 
 drop policy if exists "Rooms are writable" on public.rooms;
 create policy "Rooms are writable" on public.rooms for insert with check (auth.uid() is not null);
+
+drop policy if exists "Room members can update room flow" on public.rooms;
+create policy "Room members can update room flow"
+  on public.rooms for update
+  using (
+    exists (
+      select 1 from public.room_members m
+      where m.room_id = rooms.id and m.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.room_members m
+      where m.room_id = rooms.id and m.user_id = auth.uid()
+    )
+  );
 
 drop policy if exists "Members are readable" on public.room_members;
 create policy "Members are readable" on public.room_members for select using (true);

@@ -54,13 +54,39 @@ function profileFromDbRow(row: Record<string, unknown>): Profile {
   };
 }
 
+type RoomSyncFlowStage = "lobby" | "categories" | "restaurants";
+
 type RoomRecord = {
   id: string;
   code: string;
   host_name: string;
   country_code: string;
   city: string;
+  flow_stage?: RoomSyncFlowStage;
 };
+
+function isRoomSyncFlowStage(value: string): value is RoomSyncFlowStage {
+  return value === "lobby" || value === "categories" || value === "restaurants";
+}
+
+function nextRoomStageFromSyncedFlow(current: RoomStage, synced: RoomSyncFlowStage): RoomStage | null {
+  if (synced === "categories") {
+    if (current === "lobby") return "categories";
+    return null;
+  }
+  if (synced === "restaurants") {
+    if (
+      current === "lobby" ||
+      current === "categories" ||
+      current === "waiting_categories" ||
+      current === "category_match"
+    ) {
+      return "restaurants";
+    }
+    return null;
+  }
+  return null;
+}
 
 type RoomMember = {
   id: string;
@@ -122,6 +148,9 @@ type RoomsTable = {
     select: () => {
       single: () => UntypedQueryResult<RoomRecord>;
     };
+  };
+  update: (value: { flow_stage: RoomSyncFlowStage }) => {
+    eq: (column: string, value: string) => Promise<{ error?: { message?: string } | null }>;
   };
 };
 
@@ -993,18 +1022,32 @@ export function FoodMatchApp() {
   const handleHostStartCategories = useCallback(() => {
     if (!isRoomHost) return;
     setRoomStage("categories");
-    if (supabase && activeRoom?.id) {
-      broadcastRoomFlowEvent(supabase, activeRoom.id, "categories_started");
+    const roomId = activeRoom?.id;
+    const roomsTable = getRoomsTable();
+    if (supabase && roomId && roomsTable) {
+      void roomsTable.update({ flow_stage: "categories" }).eq("id", roomId).then(({ error }) => {
+        if (error && !isMissingColumnError(error, "flow_stage")) {
+          return;
+        }
+      });
+      broadcastRoomFlowEvent(supabase, roomId, "categories_started");
     }
-  }, [isRoomHost, supabase, activeRoom?.id]);
+  }, [getRoomsTable, isRoomHost, supabase, activeRoom?.id]);
 
   const handleHostStartRestaurantRound = useCallback(() => {
     if (!isRoomHost) return;
     setRoomStage("restaurants");
-    if (supabase && activeRoom?.id) {
-      broadcastRoomFlowEvent(supabase, activeRoom.id, "restaurants_started");
+    const roomId = activeRoom?.id;
+    const roomsTable = getRoomsTable();
+    if (supabase && roomId && roomsTable) {
+      void roomsTable.update({ flow_stage: "restaurants" }).eq("id", roomId).then(({ error }) => {
+        if (error && !isMissingColumnError(error, "flow_stage")) {
+          return;
+        }
+      });
+      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
     }
-  }, [isRoomHost, supabase, activeRoom?.id]);
+  }, [getRoomsTable, isRoomHost, supabase, activeRoom?.id]);
 
   async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
@@ -1342,28 +1385,48 @@ export function FoodMatchApp() {
       setRoomMembers((prev) => mergeMemberRowsFromServer(rows, prev));
     }
 
-    void loadMembers();
+    function applyRemoteFlowStage(raw: string | undefined) {
+      if (typeof raw !== "string" || !isRoomSyncFlowStage(raw)) return;
+      setRoomStage((prev) => nextRoomStageFromSyncedFlow(prev, raw) ?? prev);
+    }
+
+    async function loadRoomFlow() {
+      const { data, error } = await client.from("rooms").select("flow_stage").eq("id", roomId).maybeSingle();
+      if (!active) return;
+      if (error) {
+        if (isMissingColumnError(error, "flow_stage")) return;
+        return;
+      }
+      const raw = (data as { flow_stage?: string } | null)?.flow_stage;
+      applyRemoteFlowStage(raw);
+    }
+
+    async function refreshMembersAndFlow() {
+      await Promise.all([loadMembers(), loadRoomFlow()]);
+    }
+
+    void refreshMembersAndFlow();
 
     const staggerDelays = [300, 900, 2200];
     const staggerIds = staggerDelays.map((delay) =>
       window.setTimeout(() => {
-        void loadMembers();
+        void refreshMembersAndFlow();
       }, delay),
     );
 
     const pollMs = screen === "room" ? 1200 : 3500;
     const pollId = window.setInterval(() => {
-      void loadMembers();
+      void refreshMembersAndFlow();
     }, pollMs);
 
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        void loadMembers();
+        void refreshMembersAndFlow();
       }
     };
 
     const onWindowFocus = () => {
-      void loadMembers();
+      void refreshMembersAndFlow();
     };
 
     document.addEventListener("visibilitychange", onVisibility);
@@ -1401,11 +1464,11 @@ export function FoodMatchApp() {
       )
       .on("broadcast", { event: "categories_started" }, () => {
         if (!active) return;
-        setRoomStage("categories");
+        applyRemoteFlowStage("categories");
       })
       .on("broadcast", { event: "restaurants_started" }, () => {
         if (!active) return;
-        setRoomStage("restaurants");
+        applyRemoteFlowStage("restaurants");
       })
       .subscribe();
 
@@ -1423,9 +1486,23 @@ export function FoodMatchApp() {
           void loadMembers();
         },
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "rooms",
+          filter: `id=eq.${roomId}`,
+        },
+        (payload: { new?: Record<string, unknown> }) => {
+          if (!active) return;
+          const raw = payload.new?.flow_stage;
+          applyRemoteFlowStage(typeof raw === "string" ? raw : undefined);
+        },
+      )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
-          void loadMembers();
+          void refreshMembersAndFlow();
         }
       });
 
