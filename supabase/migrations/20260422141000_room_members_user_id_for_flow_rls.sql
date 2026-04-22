@@ -7,14 +7,40 @@ create policy "Room members can update room flow"
   on public.rooms for update
   using (
     exists (
-      select 1 from public.room_members m
-      where m.room_id = rooms.id and m.user_id = auth.uid()
+      select 1
+      from public.room_members m
+      where m.room_id = rooms.id
+        and (
+          m.user_id = auth.uid()
+          or (
+            m.user_id is null
+            and exists (
+              select 1
+              from public.profiles p
+              where p.id = auth.uid()
+                and lower(trim(p.full_name)) = lower(trim(m.name))
+            )
+          )
+        )
     )
   )
   with check (
     exists (
-      select 1 from public.room_members m
-      where m.room_id = rooms.id and m.user_id = auth.uid()
+      select 1
+      from public.room_members m
+      where m.room_id = rooms.id
+        and (
+          m.user_id = auth.uid()
+          or (
+            m.user_id is null
+            and exists (
+              select 1
+              from public.profiles p
+              where p.id = auth.uid()
+                and lower(trim(p.full_name)) = lower(trim(m.name))
+            )
+          )
+        )
     )
   );
 

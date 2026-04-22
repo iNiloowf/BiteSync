@@ -328,6 +328,31 @@ function broadcastRoomFlowEvent(client: SupabaseBrowser, roomId: string, event: 
   });
 }
 
+async function persistRoomFlowStage(
+  client: SupabaseBrowser,
+  roomId: string,
+  stage: RoomSyncFlowStage,
+): Promise<boolean> {
+  // Added by migration 20260422143000; project has no generated Database types for RPC.
+  const rpcResult = await (
+    client as unknown as {
+      rpc: (
+        name: string,
+        args: { p_room_id: string; p_flow_stage: RoomSyncFlowStage },
+      ) => Promise<{ error: { message?: string } | null }>;
+    }
+  ).rpc("set_room_flow_stage", { p_room_id: roomId, p_flow_stage: stage });
+  if (!rpcResult.error) return true;
+
+  const roomsUpdate = client.from("rooms") as unknown as {
+    update: (row: { flow_stage: RoomSyncFlowStage }) => {
+      eq: (column: string, value: string) => Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const { error } = await roomsUpdate.update({ flow_stage: stage }).eq("id", roomId);
+  return !error;
+}
+
 export function FoodMatchApp() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -1023,31 +1048,29 @@ export function FoodMatchApp() {
     if (!isRoomHost) return;
     setRoomStage("categories");
     const roomId = activeRoom?.id;
-    const roomsTable = getRoomsTable();
-    if (supabase && roomId && roomsTable) {
-      void roomsTable.update({ flow_stage: "categories" }).eq("id", roomId).then(({ error }) => {
-        if (error && !isMissingColumnError(error, "flow_stage")) {
-          return;
+    if (supabase && roomId) {
+      void persistRoomFlowStage(supabase, roomId, "categories").then((ok) => {
+        if (!ok) {
+          setMessage("Could not sync room for other players. Run Supabase migration 20260422143000 (set_room_flow_stage).");
         }
       });
       broadcastRoomFlowEvent(supabase, roomId, "categories_started");
     }
-  }, [getRoomsTable, isRoomHost, supabase, activeRoom?.id]);
+  }, [isRoomHost, supabase, activeRoom?.id]);
 
   const handleHostStartRestaurantRound = useCallback(() => {
     if (!isRoomHost) return;
     setRoomStage("restaurants");
     const roomId = activeRoom?.id;
-    const roomsTable = getRoomsTable();
-    if (supabase && roomId && roomsTable) {
-      void roomsTable.update({ flow_stage: "restaurants" }).eq("id", roomId).then(({ error }) => {
-        if (error && !isMissingColumnError(error, "flow_stage")) {
-          return;
+    if (supabase && roomId) {
+      void persistRoomFlowStage(supabase, roomId, "restaurants").then((ok) => {
+        if (!ok) {
+          setMessage("Could not sync room for other players. Run Supabase migration 20260422143000 (set_room_flow_stage).");
         }
       });
       broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
     }
-  }, [getRoomsTable, isRoomHost, supabase, activeRoom?.id]);
+  }, [isRoomHost, supabase, activeRoom?.id]);
 
   async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
