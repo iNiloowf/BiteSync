@@ -198,6 +198,22 @@ function restaurantPassParticipantKeyForSelf(userId: string | null | undefined, 
   return normalizedMemberNameKey(n);
 }
 
+function restaurantVoteVoterKey(vote: RoomRestaurantVote): string {
+  if (vote.user_id) return `u:${String(vote.user_id).trim()}`;
+  if (vote.member_name?.trim()) return normalizedMemberNameKey(vote.member_name);
+  return "";
+}
+
+function displayNameForRestaurantVoterKey(key: string, members: readonly RoomMember[]): string {
+  if (key.startsWith("u:")) {
+    const uid = key.slice(2).trim();
+    const hit = members.find((m) => m.user_id && String(m.user_id).trim() === uid);
+    return hit?.name?.trim() || "Someone";
+  }
+  const hit = members.find((m) => normalizedMemberNameKey(m.name) === key);
+  return hit?.name?.trim() || "Someone";
+}
+
 function categoryVoteKey(vote: RoomCategoryVote): string {
   if (vote.user_id) return String(vote.user_id).trim();
   if (vote.member_name) return normalizedMemberNameKey(vote.member_name);
@@ -828,11 +844,6 @@ export function FoodMatchApp() {
     return [...union];
   }, [memberCount, myRestaurantVotes, restaurantVotes, strictMutualRestaurantIds]);
 
-  const finalRestaurantsUnionFallback = useMemo(
-    () => memberCount > 1 && strictMutualRestaurantIds.length === 0 && finalRestaurantIds.length > 0,
-    [memberCount, strictMutualRestaurantIds.length, finalRestaurantIds.length],
-  );
-
   const restaurantDisplayPool = useMemo(() => {
     const byId = new Map<string, CityRestaurant>();
     for (const r of restaurantCandidates) {
@@ -846,24 +857,75 @@ export function FoodMatchApp() {
     return [...byId.values()];
   }, [restaurantCandidates, visibleCityRestaurants]);
 
-  const finalRestaurants = useMemo(() => {
-    if (finalRestaurantIds.length === 0) return [];
-
+  const restaurantByIdLookup = useMemo(() => {
     const byId = new Map<string, CityRestaurant>();
-    for (const r of restaurantCandidates) {
+    for (const r of restaurantDisplayPool) {
       byId.set(r.id, r);
     }
-    for (const r of visibleCityRestaurants) {
-      if (!byId.has(r.id)) {
-        byId.set(r.id, r);
-      }
-    }
+    return byId;
+  }, [restaurantDisplayPool]);
 
-    return finalRestaurantIds
-      .map((id) => byId.get(id))
+  const restaurantLikeBreakdown = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const v of restaurantVotes) {
+      if (v.decision !== "like") continue;
+      const k = restaurantVoteVoterKey(v);
+      if (!k) continue;
+      if (!map.has(v.restaurant_id)) map.set(v.restaurant_id, new Set());
+      map.get(v.restaurant_id)!.add(k);
+    }
+    return map;
+  }, [restaurantVotes]);
+
+  const mutualFinalRestaurants = useMemo(() => {
+    if (memberCount <= 1) {
+      return finalRestaurantIds
+        .map((id) => restaurantByIdLookup.get(id))
+        .filter((r): r is CityRestaurant => Boolean(r))
+        .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+    }
+    return strictMutualRestaurantIds
+      .map((id) => restaurantByIdLookup.get(id))
       .filter((r): r is CityRestaurant => Boolean(r))
-      .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0));
-  }, [finalRestaurantIds, restaurantCandidates, visibleCityRestaurants]);
+      .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+  }, [memberCount, finalRestaurantIds, strictMutualRestaurantIds, restaurantByIdLookup]);
+
+  const partialCoLikedFinalRows = useMemo(() => {
+    if (memberCount <= 1) return [] as { restaurant: CityRestaurant; likedByLabel: string }[];
+    const rows: { restaurant: CityRestaurant; likedByLabel: string }[] = [];
+    const mutualIds = new Set(strictMutualRestaurantIds);
+    for (const [id, likers] of restaurantLikeBreakdown) {
+      if (mutualIds.has(id)) continue;
+      const c = likers.size;
+      if (c < 2 || c >= memberCount) continue;
+      const r = restaurantByIdLookup.get(id);
+      if (!r) continue;
+      const names = [...likers].map((key) => displayNameForRestaurantVoterKey(key, distinctRoomMembers));
+      names.sort((a, b) => a.localeCompare(b));
+      rows.push({ restaurant: r, likedByLabel: names.join(" + ") });
+    }
+    rows.sort((a, b) => (b.restaurant.rating ?? 0) - (a.restaurant.rating ?? 0));
+    return rows;
+  }, [memberCount, strictMutualRestaurantIds, restaurantLikeBreakdown, restaurantByIdLookup, distinctRoomMembers]);
+
+  const soloLikedFinalRows = useMemo(() => {
+    if (memberCount <= 1) return [] as { restaurant: CityRestaurant; likedByLabel: string }[];
+    const rows: { restaurant: CityRestaurant; likedByLabel: string }[] = [];
+    const mutualIds = new Set(strictMutualRestaurantIds);
+    for (const [id, likers] of restaurantLikeBreakdown) {
+      if (mutualIds.has(id)) continue;
+      if (likers.size !== 1) continue;
+      const r = restaurantByIdLookup.get(id);
+      if (!r) continue;
+      const key = [...likers][0]!;
+      rows.push({
+        restaurant: r,
+        likedByLabel: displayNameForRestaurantVoterKey(key, distinctRoomMembers),
+      });
+    }
+    rows.sort((a, b) => (b.restaurant.rating ?? 0) - (a.restaurant.rating ?? 0));
+    return rows;
+  }, [memberCount, strictMutualRestaurantIds, restaurantLikeBreakdown, restaurantByIdLookup, distinctRoomMembers]);
 
   const handleHostShowFinalResults = useCallback(() => {
     if (!isRoomHost) return;
@@ -2336,8 +2398,6 @@ export function FoodMatchApp() {
                 stage={roomStage}
                 roomMembers={distinctRoomMembers}
                 expectedRestaurantMemberCount={restaurantRoundExpectedMemberKeys.length}
-                restaurantVotes={restaurantVotes}
-                myRestaurantVotes={myRestaurantVotes}
                 sharedMatchCategories={sharedMatchCategories}
                 restaurantFocusCategories={restaurantFocusCategories}
                 membersStillSwipingCategories={membersStillSwipingCategories}
@@ -2345,9 +2405,9 @@ export function FoodMatchApp() {
                 allMembersFinishedRestaurants={allMembersFinishedRestaurants}
                 pendingCategories={pendingCategories}
                 pendingRestaurants={pendingRestaurants}
-                finalRestaurants={finalRestaurants}
-                finalRestaurantsUnionFallback={finalRestaurantsUnionFallback}
-                restaurantDisplayPool={restaurantDisplayPool}
+                mutualFinalRestaurants={mutualFinalRestaurants}
+                partialCoLikedFinalRows={partialCoLikedFinalRows}
+                soloLikedFinalRows={soloLikedFinalRows}
                 restaurantsLoading={restaurantsLoading}
                 loadedPlaceCount={visibleCityRestaurants.length}
                 swipePickLabel={swipePickLabel}
@@ -3215,6 +3275,134 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   prev.restaurant.categoryIds.join(",") === next.restaurant.categoryIds.join(",") &&
   prev.onHideForever === next.onHideForever);
 
+const finalResultDetailOpenButtonClass =
+  "w-full rounded-full bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] px-4 py-2.5 text-xs font-semibold text-white shadow-[0_18px_55px_rgba(255,92,124,0.24)] transition hover:brightness-[1.04] active:scale-[0.98]";
+
+const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
+  restaurant,
+  likedByLine,
+}: {
+  restaurant: CityRestaurant;
+  likedByLine?: string;
+}) {
+  const [detailOpen, setDetailOpen] = useState(false);
+  const photos = restaurant.photoUrls ?? [];
+  const heroSrc = photos[0] ? placePhotoWithSize(photos[0], 960, 720) : null;
+
+  useEffect(() => {
+    if (!detailOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDetailOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [detailOpen]);
+
+  const detailModal =
+    detailOpen &&
+    createPortal(
+      <div
+        className="fixed inset-0 z-[260] flex flex-col bg-black/88 p-3 backdrop-blur-sm sm:p-5"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${restaurant.name} details`}
+        onClick={() => setDetailOpen(false)}
+      >
+        <div
+          className="mx-auto mt-10 flex max-h-[min(92dvh,820px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/12 bg-[#1a1520] shadow-2xl sm:mt-12"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+            <p className="min-w-0 truncate pr-2 text-sm font-semibold text-white">{restaurant.name}</p>
+            <button
+              type="button"
+              onClick={() => setDetailOpen(false)}
+              className="shrink-0 rounded-full border border-white/14 bg-white/8 px-3 py-1.5 text-xs font-semibold text-white/90 transition hover:bg-white/14"
+            >
+              Close
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-white/55">
+              <span className="rounded-full bg-white/8 px-2 py-1">{restaurant.rating?.toFixed(1) ?? "—"} rating</span>
+              <span className="rounded-full bg-white/8 px-2 py-1">{restaurant.userRatingCount ?? 0} reviews</span>
+              <span className="rounded-full bg-white/8 px-2 py-1">{restaurant.priceLevel ?? "Price"}</span>
+            </div>
+            <p className="mt-3 text-sm leading-relaxed text-white/80">{restaurant.address}</p>
+            {likedByLine ? (
+              <p className="mt-2 text-xs font-medium text-emerald-200/90">{likedByLine}</p>
+            ) : null}
+            {photos.length > 0 ? (
+              <div className="mt-4 space-y-2">
+                <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Photos</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {photos.map((src, i) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={`${restaurant.id}-ph-${i}`}
+                      src={placePhotoWithSize(src, 640, 480)}
+                      alt=""
+                      width={640}
+                      height={480}
+                      className="aspect-[4/3] w-full rounded-xl object-cover ring-1 ring-white/15"
+                      loading="lazy"
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-4 text-xs text-white/45">No photos available.</p>
+            )}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+
+  return (
+    <>
+      <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06] shadow-[0_12px_40px_rgba(0,0,0,0.25)]">
+        <div className="relative aspect-[16/10] w-full bg-[#231a28]">
+          {heroSrc ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={heroSrc}
+              alt=""
+              width={960}
+              height={600}
+              className="h-full w-full object-cover"
+              loading="lazy"
+              decoding="async"
+            />
+          ) : (
+            <div className="flex h-full min-h-[140px] items-center justify-center text-sm text-white/40">No image</div>
+          )}
+        </div>
+        <div className="space-y-2 px-4 py-3 sm:py-4">
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="min-w-0 text-base font-semibold leading-snug text-white sm:text-lg">{restaurant.name}</h3>
+            <div className="shrink-0 rounded-xl bg-white/8 px-2 py-1 text-right">
+              <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
+              <p className="text-[10px] text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
+            </div>
+          </div>
+          {likedByLine ? <p className="text-xs font-medium text-emerald-200/90">{likedByLine}</p> : null}
+          <p className="line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
+          <button type="button" onClick={() => setDetailOpen(true)} className={finalResultDetailOpenButtonClass}>
+            View detail
+          </button>
+        </div>
+      </div>
+      {detailModal}
+    </>
+  );
+});
+
 function roomStageFlowLabel(stage: RoomStage) {
   switch (stage) {
     case "waiting_categories":
@@ -3232,8 +3420,6 @@ function RoomScreen({
   stage,
   roomMembers,
   expectedRestaurantMemberCount,
-  restaurantVotes,
-  myRestaurantVotes,
   sharedMatchCategories,
   restaurantFocusCategories,
   membersStillSwipingCategories,
@@ -3241,9 +3427,9 @@ function RoomScreen({
   allMembersFinishedRestaurants,
   pendingCategories,
   pendingRestaurants,
-  finalRestaurants,
-  finalRestaurantsUnionFallback,
-  restaurantDisplayPool,
+  mutualFinalRestaurants,
+  partialCoLikedFinalRows,
+  soloLikedFinalRows,
   restaurantsLoading,
   loadedPlaceCount,
   swipePickLabel,
@@ -3264,8 +3450,6 @@ function RoomScreen({
   stage: RoomStage;
   roomMembers: RoomMember[];
   expectedRestaurantMemberCount: number;
-  restaurantVotes: RoomRestaurantVote[];
-  myRestaurantVotes: RoomRestaurantVote[];
   sharedMatchCategories: Category[];
   restaurantFocusCategories: Category[];
   membersStillSwipingCategories: RoomMember[];
@@ -3273,9 +3457,9 @@ function RoomScreen({
   allMembersFinishedRestaurants: boolean;
   pendingCategories: typeof categories;
   pendingRestaurants: CityRestaurant[];
-  finalRestaurants: CityRestaurant[];
-  finalRestaurantsUnionFallback: boolean;
-  restaurantDisplayPool: CityRestaurant[];
+  mutualFinalRestaurants: CityRestaurant[];
+  partialCoLikedFinalRows: { restaurant: CityRestaurant; likedByLabel: string }[];
+  soloLikedFinalRows: { restaurant: CityRestaurant; likedByLabel: string }[];
   restaurantsLoading: boolean;
   loadedPlaceCount: number;
   swipePickLabel: string;
@@ -3325,43 +3509,6 @@ function RoomScreen({
   const showLobbyChrome = stage === "lobby" && !enterSwipe;
   const showStartTransition = stage === "lobby" && enterSwipe;
   const immersive = stage !== "lobby";
-  const myLikedRestaurantIds = useMemo(
-    () => new Set(myRestaurantVotes.filter((vote) => vote.decision === "like").map((vote) => vote.restaurant_id)),
-    [myRestaurantVotes],
-  );
-  const othersLikedRestaurantIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const vote of restaurantVotes) {
-      if (vote.decision !== "like") continue;
-      if (myLikedRestaurantIds.has(vote.restaurant_id)) continue;
-      ids.add(vote.restaurant_id);
-    }
-    return ids;
-  }, [restaurantVotes, myLikedRestaurantIds]);
-  const restaurantById = useMemo(() => {
-    const byId = new Map<string, CityRestaurant>();
-    for (const r of restaurantDisplayPool) {
-      byId.set(r.id, r);
-    }
-    for (const r of [...pendingRestaurants, ...finalRestaurants]) {
-      byId.set(r.id, r);
-    }
-    return byId;
-  }, [restaurantDisplayPool, pendingRestaurants, finalRestaurants]);
-  const myLikedRestaurants = useMemo(
-    () =>
-      [...myLikedRestaurantIds]
-        .map((id) => restaurantById.get(id))
-        .filter((r): r is CityRestaurant => Boolean(r)),
-    [myLikedRestaurantIds, restaurantById],
-  );
-  const othersLikedRestaurants = useMemo(
-    () =>
-      [...othersLikedRestaurantIds]
-        .map((id) => restaurantById.get(id))
-        .filter((r): r is CityRestaurant => Boolean(r)),
-    [othersLikedRestaurantIds, restaurantById],
-  );
 
   const swipeStages = (
     <>
@@ -3651,64 +3798,75 @@ function RoomScreen({
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-white/6 p-4">
-                <p className="text-lg font-semibold text-white">
-                  {finalRestaurantsUnionFallback ? "All likes in the room" : "Everyone's picks"}
-                </p>
+              <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/80">Top matches</p>
+                <h2 className="mt-1 text-lg font-semibold text-white">Liked by everyone</h2>
                 <p className="mt-2 text-sm leading-6 text-white/58">
-                  {finalRestaurantsUnionFallback
-                    ? "No single place was liked by everyone, so we list every restaurant someone liked, best rated first."
-                    : "Restaurants liked by everyone in the room, highest rating first."}
+                  Same place, liked by every person in the room. Hero photo, then use View detail for full address and
+                  all photos.
                 </p>
               </div>
-
-              {myLikedRestaurants.length > 0 ? (
-                <div className="rounded-2xl bg-white/6 p-4">
-                  <p className="text-sm font-semibold text-white">What you liked</p>
-                  <ul className="mt-2 space-y-1.5 text-sm text-white/80">
-                    {myLikedRestaurants.map((restaurant) => (
-                      <li key={`mine-${restaurant.id}`}>{restaurant.name}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {othersLikedRestaurants.length > 0 ? (
-                <div className="rounded-2xl bg-white/6 p-4">
-                  <p className="text-sm font-semibold text-white">Others liked</p>
-                  <ul className="mt-2 space-y-1.5 text-sm text-white/80">
-                    {othersLikedRestaurants.map((restaurant) => (
-                      <li key={`other-${restaurant.id}`}>{restaurant.name}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              <div className="space-y-2">
-                {finalRestaurants.length > 0 ? (
-                  finalRestaurants.map((restaurant) => (
-                    <div key={restaurant.id} className="rounded-2xl bg-white/6 px-4 py-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-white">{restaurant.name}</p>
-                          <p className="mt-1 text-xs leading-5 text-white/50">{restaurant.address}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-semibold text-white">{restaurant.rating?.toFixed(1) ?? "—"}</p>
-                          <p className="text-xs text-white/45">{restaurant.userRatingCount ?? 0} reviews</p>
-                        </div>
-                      </div>
-                    </div>
+              <div className="space-y-3">
+                {mutualFinalRestaurants.length > 0 ? (
+                  mutualFinalRestaurants.map((restaurant) => (
+                    <FinalResultPlaceCard key={`mutual-${restaurant.id}`} restaurant={restaurant} />
                   ))
                 ) : (
                   <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
-                    No likes were recorded for this round, or we could not load place details.
-                    {isRoomHost ? " You can restart from categories or rerun only restaurants with the same room." : ""}
+                    No restaurant was liked by everyone in this round.
                   </div>
                 )}
               </div>
 
-              {finalRestaurants.length === 0 && isRoomHost ? (
+              {partialCoLikedFinalRows.length > 0 ? (
+                <div className="space-y-3 pt-2">
+                  <div className="rounded-2xl border border-white/12 bg-white/6 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/45">Co-likes</p>
+                    <h2 className="mt-1 text-lg font-semibold text-white">Liked by some of you</h2>
+                    <p className="mt-2 text-sm leading-6 text-white/55">
+                      At least two people liked these, but not the whole group. Names show who picked them.
+                    </p>
+                  </div>
+                  {partialCoLikedFinalRows.map(({ restaurant, likedByLabel }) => (
+                    <FinalResultPlaceCard
+                      key={`partial-${restaurant.id}`}
+                      restaurant={restaurant}
+                      likedByLine={`Liked by ${likedByLabel}`}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {soloLikedFinalRows.length > 0 ? (
+                <div className="space-y-3 pt-2">
+                  <div className="rounded-2xl border border-white/12 bg-white/6 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/45">Solo likes</p>
+                    <h2 className="mt-1 text-lg font-semibold text-white">Only one person</h2>
+                    <p className="mt-2 text-sm leading-6 text-white/55">Still shown so nothing gets lost.</p>
+                  </div>
+                  {soloLikedFinalRows.map(({ restaurant, likedByLabel }) => (
+                    <FinalResultPlaceCard
+                      key={`solo-${restaurant.id}`}
+                      restaurant={restaurant}
+                      likedByLine={`Only ${likedByLabel}`}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {mutualFinalRestaurants.length === 0 &&
+              partialCoLikedFinalRows.length === 0 &&
+              soloLikedFinalRows.length === 0 ? (
+                <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
+                  No likes were recorded for this round, or we could not load place details.
+                  {isRoomHost ? " You can restart from categories or rerun only restaurants with the same room." : ""}
+                </div>
+              ) : null}
+
+              {mutualFinalRestaurants.length === 0 &&
+              partialCoLikedFinalRows.length === 0 &&
+              soloLikedFinalRows.length === 0 &&
+              isRoomHost ? (
                 <>
                   <button type="button" onClick={onRestartCategories} className={primaryButtonClass}>
                     Choose food category again
