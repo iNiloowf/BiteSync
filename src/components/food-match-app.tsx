@@ -767,42 +767,47 @@ export function FoodMatchApp() {
     [restaurantVotes],
   );
 
-  const myRestaurantVoteCount = useMemo(() => {
-    const ids = new Set(myRestaurantVotes.map((vote) => vote.restaurant_id));
-    return ids.size;
-  }, [myRestaurantVotes]);
+  const restaurantActiveMembers = useMemo(() => {
+    if (distinctRoomMembers.length === 0) return [] as RoomMember[];
+    return distinctRoomMembers.filter((member) => {
+      const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
+      return Boolean(set && set.size > 0);
+    });
+  }, [distinctRoomMembers, memberRestaurantProgress]);
 
   const restaurantRoundCompletionTarget = useMemo(() => {
-    if (myRestaurantVoteCount > 0) return myRestaurantVoteCount;
-    const allVotedIds = new Set(restaurantVotes.map((vote) => vote.restaurant_id));
-    return allVotedIds.size;
-  }, [myRestaurantVoteCount, restaurantVotes]);
+    if (pendingRestaurants.length > 0) return 0;
+    const activeCounts = restaurantActiveMembers
+      .map((member) => memberRestaurantVotesSet(member, memberRestaurantProgress)?.size ?? 0)
+      .filter((size) => size > 0);
+    if (activeCounts.length === 0) return 0;
+    return Math.min(...activeCounts);
+  }, [pendingRestaurants.length, restaurantActiveMembers, memberRestaurantProgress]);
 
   const allMembersFinishedRestaurants = useMemo(() => {
     if (pendingRestaurants.length > 0) return false;
-    if (memberCount <= 1) return true;
+    if (restaurantActiveMembers.length === 0) return memberCount <= 1;
     if (restaurantRoundCompletionTarget <= 0) return false;
-    if (distinctRoomMembers.length === 0) return false;
-    return distinctRoomMembers.every((member) => {
+    return restaurantActiveMembers.every((member) => {
       const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
       return Boolean(set && set.size >= restaurantRoundCompletionTarget);
     });
   }, [
     pendingRestaurants.length,
     memberCount,
+    restaurantActiveMembers,
     restaurantRoundCompletionTarget,
-    distinctRoomMembers,
     memberRestaurantProgress,
   ]);
 
   const membersStillSwipingRestaurants = useMemo(() => {
-    if (memberCount <= 1) return [] as RoomMember[];
-    if (restaurantRoundCompletionTarget <= 0) return distinctRoomMembers;
-    return distinctRoomMembers.filter((member) => {
+    if (restaurantActiveMembers.length === 0) return [] as RoomMember[];
+    if (restaurantRoundCompletionTarget <= 0) return restaurantActiveMembers;
+    return restaurantActiveMembers.filter((member) => {
       const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
       return !set || set.size < restaurantRoundCompletionTarget;
     });
-  }, [memberCount, restaurantRoundCompletionTarget, distinctRoomMembers, memberRestaurantProgress]);
+  }, [restaurantActiveMembers, restaurantRoundCompletionTarget, memberRestaurantProgress]);
 
   const finalRestaurantIds = useMemo(
     () =>
@@ -1183,13 +1188,19 @@ export function FoodMatchApp() {
     setMessage("");
 
     try {
-      const code = roomCodeInput.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-      const { data: roomData, error: roomError } = await getRoomsTable()
-        .select("*")
-        .eq("code", code)
-        .maybeSingle();
-
-      if (roomError) throw roomError;
+      const candidates = roomCodeCandidates(roomCodeInput);
+      if (candidates.length === 0) {
+        throw new Error("Enter a valid room code.");
+      }
+      let roomData: RoomRecord | null = null;
+      for (const code of candidates) {
+        const lookup = await getRoomsTable().select("*").eq("code", code).maybeSingle();
+        if (lookup.error) throw lookup.error;
+        if (lookup.data) {
+          roomData = lookup.data as RoomRecord;
+          break;
+        }
+      }
       if (!roomData) throw new Error("Room not found.");
 
       const memberError = await insertRoomMember(roomData.id, profile.full_name, session.user.id);
@@ -2501,9 +2512,9 @@ function HomeScreen({
           <p className="text-sm text-white/58">Already have a room code?</p>
           <input
             value={roomCodeInput}
-            onChange={(event) => onRoomCodeChange(event.target.value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase())}
+            onChange={(event) => onRoomCodeChange(formatRoomCodeInput(event.target.value))}
             className={`${fieldClass} mt-4 text-center text-2xl font-semibold tracking-[0.24em]`}
-            placeholder="BSYN204"
+            placeholder="CALG - 571"
           />
           <button onClick={onJoin} disabled={submitting} className="mt-4 w-full rounded-full bg-white px-5 py-4 font-semibold text-stone-950">
             Join room
@@ -2650,6 +2661,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   onHideForever?: (place: CityRestaurant) => void | Promise<void>;
 }) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const photos = restaurant.photoUrls ?? [];
   const extraPhotos = photos.slice(1);
   const heroTapRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
@@ -2663,6 +2675,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 
   useEffect(() => {
     setLightboxIndex(null);
+    setMenuOpen(false);
   }, [restaurant.id]);
 
   const lightboxOpen = lightboxIndex !== null && photos.length > 0;
@@ -2855,6 +2868,36 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
     <>
       <div className="flex h-full min-h-0 max-h-full w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
         <div className="relative min-h-0 flex-1 basis-0 overflow-hidden bg-[linear-gradient(180deg,#2a2230_0%,#1a1520_100%)]">
+          {onHideForever ? (
+            <div className="absolute right-2 top-2 z-20">
+              <button
+                type="button"
+                aria-label="More options"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setMenuOpen((v) => !v);
+                }}
+                className="grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-black/35 text-lg text-white/90 backdrop-blur-sm transition hover:bg-black/50"
+              >
+                ...
+              </button>
+              {menuOpen ? (
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setMenuOpen(false);
+                    void onHideForever(restaurant);
+                  }}
+                  className="absolute right-0 mt-2 whitespace-nowrap rounded-xl border border-rose-400/30 bg-[#2a1218]/95 px-3 py-2 text-xs font-semibold text-rose-100 shadow-lg"
+                >
+                  Delete forever
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {photos[0] ? (
             <button
               type="button"
@@ -2900,7 +2943,7 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
           )}
         </div>
 
-        <div className="max-h-[min(240px,42dvh)] shrink-0 space-y-2 overflow-y-auto overflow-x-hidden px-3 pb-3 pt-2 sm:px-4 sm:pb-4 sm:pt-3">
+        <div className="shrink-0 space-y-2 overflow-hidden px-3 pb-3 pt-2 sm:px-4 sm:pb-4 sm:pt-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="text-[10px] uppercase tracking-[0.28em] text-white/38">Restaurant</p>
@@ -2940,19 +2983,6 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
               {restaurant.primaryType ?? "Restaurant"}
             </span>
           </div>
-
-          {onHideForever ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                void onHideForever(restaurant);
-              }}
-              className="w-full rounded-xl border border-rose-400/25 bg-rose-500/10 py-2.5 text-center text-xs font-semibold text-rose-100/95 transition hover:bg-rose-500/18"
-            >
-              Hide forever
-            </button>
-          ) : null}
 
           {extraPhotos.length > 0 ? (
             <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -3752,6 +3782,15 @@ function SwipePanel<T>({
     [item, commit],
   );
 
+  const triggerAction = useCallback(
+    (direction: "like" | "skip") => {
+      if (commitBusyRef.current) return;
+      gestureItemRef.current = item;
+      void commit(direction);
+    },
+    [item, commit],
+  );
+
   return (
     <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : "space-y-4"}>
       <div
@@ -3786,20 +3825,34 @@ function SwipePanel<T>({
           }}
         >
           <div className={`relative h-full ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
-            {Math.abs(dragX) > 18 ? (
-              <div
-                className={`absolute left-3 top-3 z-20 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] sm:left-4 sm:top-4 sm:px-4 sm:py-2 sm:text-xs ${
-                  dragX > 0
-                    ? "border-emerald-300/50 bg-emerald-300/14 text-emerald-200"
-                    : "border-rose-300/50 bg-rose-300/14 text-rose-200"
-                }`}
-              >
-                {dragX > 0 ? likeLabel : skipLabel}
-              </div>
-            ) : null}
+            <div
+              className={`pointer-events-none absolute left-3 top-3 z-20 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] transition-opacity sm:left-4 sm:top-4 sm:px-4 sm:py-2 sm:text-xs ${
+                dragX > 0
+                  ? "border-emerald-300/60 bg-emerald-300/25 text-emerald-100"
+                  : "border-rose-300/60 bg-rose-300/25 text-rose-100"
+              } ${Math.abs(dragX) > 18 ? "opacity-100" : "opacity-0"}`}
+            >
+              {dragX > 0 ? likeLabel : skipLabel}
+            </div>
             {renderCard(item)}
           </div>
         </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={() => triggerAction("skip")}
+          className="rounded-xl border border-rose-300/45 bg-rose-300/18 px-3 py-2.5 text-sm font-semibold text-rose-100"
+        >
+          Pass
+        </button>
+        <button
+          type="button"
+          onClick={() => triggerAction("like")}
+          className="rounded-xl border border-emerald-300/45 bg-emerald-300/18 px-3 py-2.5 text-sm font-semibold text-emerald-100"
+        >
+          Like
+        </button>
       </div>
     </div>
   );
@@ -3826,7 +3879,33 @@ function getInitials(value: string) {
 function createRoomCode(city: string) {
   const cityCode = city.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "BSYN";
   const suffix = Math.floor(100 + Math.random() * 900);
-  return `${cityCode}${suffix}`;
+  return `${cityCode} - ${suffix}`;
+}
+
+function formatRoomCodeInput(value: string) {
+  const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const prefix = cleaned.slice(0, 4);
+  const suffix = cleaned
+    .slice(4)
+    .replace(/[^0-9]/g, "")
+    .slice(0, 3);
+  if (!prefix) return "";
+  if (!suffix) return prefix;
+  return `${prefix} - ${suffix}`;
+}
+
+function roomCodeCandidates(value: string) {
+  const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const prefix = cleaned.slice(0, 4);
+  const suffix = cleaned
+    .slice(4)
+    .replace(/[^0-9]/g, "")
+    .slice(0, 3);
+  if (!prefix) return [] as string[];
+  if (!suffix) return [prefix];
+  const compact = `${prefix}${suffix}`;
+  const dashed = `${prefix} - ${suffix}`;
+  return compact === dashed ? [dashed] : [dashed, compact];
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
