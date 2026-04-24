@@ -14,8 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "BiteSync",
-  description:
-    "BiteSync is a swipe-first web app for group food decisions with simple saved login, QR room joins, and restaurant matching.",
+  description: "Swipe together, pick a place — group food decisions in one room.",
 };
 
 export const viewport: Viewport = {

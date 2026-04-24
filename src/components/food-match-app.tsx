@@ -7,6 +7,17 @@ import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 import { categories, countries, type Category } from "@/data/mock-data";
 import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
 
+const uiPage =
+  "bg-[radial-gradient(ellipse_120%_85%_at_50%_-10%,rgba(255,124,88,0.12),transparent_50%),radial-gradient(ellipse_90%_55%_at_100%_100%,rgba(115,82,210,0.1),transparent_46%),#0a090d]";
+const uiShell =
+  "rounded-[28px] border border-white/10 bg-[#151119]/96 shadow-[0_26px_90px_rgba(0,0,0,0.52)] backdrop-blur-xl";
+const uiStickyBar = "border-b border-white/10 bg-[#151119]/95 backdrop-blur-md";
+const uiPopover = "rounded-2xl border border-white/10 bg-[#1c1624] shadow-[0_20px_55px_rgba(0,0,0,0.42)]";
+const uiToastBar =
+  "rounded-2xl border border-white/12 bg-[#1a1520]/95 shadow-[0_14px_40px_rgba(0,0,0,0.38)] backdrop-blur-md";
+const uiInset = "bg-[#151119]";
+const uiSwipeDeck = "rounded-[28px] bg-[#151119]";
+
 type Screen = "auth" | "home" | "profile" | "room" | "hidden_places";
 type AuthMode = "signin" | "signup";
 type RoomStage =
@@ -408,18 +419,18 @@ async function persistRoomFlowStage(
 }
 
 function formatRoomFlowPersistUserMessage(reason: string) {
-  const head = `Could not sync room for other players: ${reason}.`;
+  const head = `Sync failed: ${reason}`;
   if (
     /rooms_flow_stage_check|violates check constraint.*rooms|invalid flow_stage|new row for relation "rooms"/i.test(
       reason,
     )
   ) {
-    return `${head} Your database still only allows flow_stage lobby/categories/restaurants. In the Supabase SQL Editor, run supabase/migrations/20260424220000_room_flow_stage_final.sql (adds final and updates set_room_flow_stage). Then Dashboard → Project Settings → API → Reload schema cache. Others in the room should still get results from the live broadcast if they are connected.`;
+    return `${head}. Run supabase/migrations/20260424220000_room_flow_stage_final.sql in Supabase SQL, then reload the API schema cache. (Live broadcast may still work for people in the room.)`;
   }
   if (/flow_stage|schema cache|column .* does not exist|does not exist.*flow_stage/i.test(reason)) {
-    return `${head} Run SQL from supabase/migrations/20260423140000_ensure_rooms_flow_stage_column.sql (adds rooms.flow_stage). Then Supabase Dashboard → Project Settings → API → Reload schema.`;
+    return `${head}. Add rooms.flow_stage (see 20260423140000_ensure_rooms_flow_stage_column.sql), then reload schema cache.`;
   }
-  return `${head} Run SQL from migrations 20260422143000_set_room_flow_stage_rpc.sql and 20260423120000_room_flow_host_name_allowed.sql if policies/RPC are missing.`;
+  return `${head}. Check migrations 20260422143000_set_room_flow_stage_rpc.sql and 20260423120000_room_flow_host_name_allowed.sql for RPC and policies.`;
 }
 
 export function FoodMatchApp() {
@@ -2357,7 +2368,7 @@ export function FoodMatchApp() {
 
   if (loading) {
     return (
-      <main className="grid h-[100dvh] place-items-center overflow-hidden bg-[#0f0c12] text-white">
+      <main className={`grid h-[100dvh] place-items-center overflow-hidden ${uiPage} text-white`}>
         <div className="text-center">
           <p className="text-sm uppercase tracking-[0.28em] text-white/45">BiteSync</p>
           <h1 className="mt-4 text-4xl font-semibold">Loading...</h1>
@@ -2367,9 +2378,9 @@ export function FoodMatchApp() {
   }
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,120,68,0.14),_transparent_22%),radial-gradient(circle_at_bottom_right,_rgba(111,66,193,0.12),_transparent_24%),#0f0c12] text-white">
+    <main className={`h-[100dvh] overflow-hidden ${uiPage} text-white`}>
       <div className="mx-auto flex h-full w-full max-w-[460px] flex-col px-3 py-3 sm:px-4 sm:py-4">
-        <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#141117]/92 shadow-[0_24px_100px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+        <div className={`relative flex h-full min-h-0 flex-col overflow-hidden ${uiShell}`}>
           <AppHeader
             profile={profile}
             screen={screen}
@@ -2395,7 +2406,7 @@ export function FoodMatchApp() {
           {!hasSupabaseEnv ? (
             <div className="px-4 pt-3">
               <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                Add your Supabase keys to Vercel first to enable real sign up, profile saving, and shared rooms.
+                Add Supabase env keys to enable sign-in, profiles, and rooms.
               </div>
             </div>
           ) : null}
@@ -2519,7 +2530,7 @@ export function FoodMatchApp() {
           </div>
 
           {undoHidePlace ? (
-            <div className="pointer-events-auto absolute inset-x-3 bottom-3 z-[60] flex items-center justify-between gap-3 rounded-2xl border border-white/12 bg-[#1b1720]/95 px-4 py-3 shadow-[0_12px_40px_rgba(0,0,0,0.4)] backdrop-blur-md">
+            <div className={`pointer-events-auto absolute inset-x-3 bottom-3 z-[60] flex items-center justify-between gap-3 px-4 py-3 ${uiToastBar}`}>
               <p className="min-w-0 flex-1 truncate text-sm text-white/88">
                 Hidden: <span className="font-semibold text-white">{undoHidePlace.name}</span>
               </p>
@@ -2571,10 +2582,10 @@ function AppHeader({
             : "Choose a path";
 
   return (
-    <div className="flex items-center justify-between border-b border-white/8 px-4 py-4">
+    <div className="flex items-center justify-between border-b border-white/10 px-4 py-4">
       <div>
         <p className="text-xs uppercase tracking-[0.26em] text-white/38">BiteSync</p>
-        <p className="mt-1 text-sm text-white/68">{subtitle}</p>
+        <p className="mt-1 text-sm text-white/70">{subtitle}</p>
       </div>
 
       {profile ? (
@@ -2598,9 +2609,7 @@ function AppHeader({
             </button>
 
             {menuOpen ? (
-              <div
-                className={`absolute right-0 top-14 z-20 rounded-2xl border border-white/10 bg-[#1b1720] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.35)] ${onOpenHiddenPlaces ? "w-52" : "w-44"}`}
-              >
+              <div className={`absolute right-0 top-14 z-20 p-2 ${uiPopover} ${onOpenHiddenPlaces ? "w-52" : "w-44"}`}>
                 <button onClick={onOpenProfile} className={menuItemClass}>
                   Profile
                 </button>
@@ -2680,12 +2689,10 @@ function AuthScreen({
         </div>
 
         <h1 className="mt-3 text-[1.75rem] font-semibold leading-tight text-white sm:text-3xl">
-          {mode === "signup" ? "Create your BiteSync account." : "Welcome back."}
+          {mode === "signup" ? "Create your account" : "Welcome back"}
         </h1>
         <p className={`mt-2 text-sm text-white/58 ${isSignIn ? "leading-5" : "leading-6"}`}>
-          {mode === "signup"
-            ? "Sign up once, then every time you open the app you can go straight to Host or Join."
-            : "Sign in to jump back into your rooms and keep your profile."}
+          {mode === "signup" ? "One account — host or join rooms anytime." : "Pick up where you left off."}
         </p>
       </div>
 
@@ -2761,10 +2768,9 @@ function HiddenPlacesScreen({
         Back
       </button>
       <div className="min-w-0">
-        <h1 className="text-2xl font-semibold text-white">Hidden from suggestions</h1>
+        <h1 className="text-2xl font-semibold text-white">Hidden places</h1>
         <p className="mt-2 text-sm leading-relaxed text-white/60">
-          Checked places return to your restaurant deck. Uncheck any you want to stay hidden. Use Select all, then
-          uncheck a few to restore only some.
+          Checked = back in your deck. Select all, then uncheck what should stay hidden.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -2786,7 +2792,7 @@ function HiddenPlacesScreen({
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-0.5">
         {items.length === 0 ? (
           <p className="rounded-2xl border border-white/10 bg-white/6 px-4 py-4 text-sm text-white/55">
-            Nothing hidden yet. While swiping, tap &quot;Hide forever&quot; on a card to remove it from suggestions.
+            Nothing here yet. On a card, use Hide forever to drop it from suggestions.
           </p>
         ) : (
           items.map((item) => (
@@ -2811,7 +2817,7 @@ function HiddenPlacesScreen({
         onClick={() => void Promise.resolve(onRestore([...checkedRestore]))}
         className={primaryButtonClass}
       >
-        {submitting ? "Saving…" : "Restore checked to suggestions"}
+        {submitting ? "Saving…" : "Restore checked"}
       </button>
     </div>
   );
@@ -2835,7 +2841,7 @@ function HomeScreen({
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
       <div className="rounded-[28px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_52%,#8f6bff_100%)] p-[1px]">
-        <div className="rounded-[27px] bg-[#161218] p-5">
+        <div className={`rounded-[27px] p-5 ${uiInset}`}>
           <p className="text-sm text-white/55">Signed in as</p>
           <h1 className="mt-2 text-3xl font-semibold text-white">{profile?.full_name}</h1>
           <p className="mt-2 text-sm text-white/58">
@@ -2846,7 +2852,7 @@ function HomeScreen({
 
       <div className="grid gap-3">
         <button onClick={onHost} disabled={submitting} className={primaryCardClass}>
-          <p className="text-sm text-white/68">Start a fresh decision room</p>
+          <p className="text-sm text-white/65">New room for your group</p>
           <p className="mt-1 text-2xl font-semibold">Host a room</p>
         </button>
 
@@ -2915,9 +2921,7 @@ function ProfileScreen({
 
       <div>
         <h1 className="text-3xl font-semibold text-white">Your profile</h1>
-        <p className="mt-2 text-sm leading-7 text-white/58">
-          Update your city or upload a picture. This is the data BiteSync uses when you host or join rooms.
-        </p>
+        <p className="mt-2 text-sm leading-7 text-white/58">Name, city, and photo are used when you host or join.</p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -3208,8 +3212,8 @@ const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
 
   return (
     <>
-      <div className="flex h-full min-h-0 max-h-full w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1d1721_0%,#24182a_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
-        <div className="relative min-h-0 flex-1 basis-0 overflow-hidden bg-[linear-gradient(180deg,#2a2230_0%,#1a1520_100%)]">
+      <div className="flex h-full min-h-0 max-h-full w-full flex-col overflow-hidden rounded-[24px] bg-[linear-gradient(145deg,#1a1526_0%,#241c32_100%)] shadow-[0_28px_80px_rgba(0,0,0,0.36)] sm:rounded-[28px]">
+        <div className="relative min-h-0 flex-1 basis-0 overflow-hidden bg-[linear-gradient(180deg,#262032_0%,#151119_100%)]">
           {onHideForever ? (
             <div className="absolute right-2 top-2 z-20">
               <button
@@ -3400,7 +3404,7 @@ const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
         onClick={() => setDetailOpen(false)}
       >
         <div
-          className="mx-auto mt-10 flex max-h-[min(92dvh,820px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/12 bg-[#1a1520] shadow-2xl sm:mt-12"
+          className="mx-auto mt-10 flex max-h-[min(92dvh,820px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/12 bg-[#1c1624] shadow-2xl sm:mt-12"
           onClick={(event) => event.stopPropagation()}
         >
           <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
@@ -3602,9 +3606,7 @@ function RoomScreen({
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-3 text-center">
           <p className="text-xs font-medium uppercase tracking-[0.28em] text-white/40">Categories</p>
           <h2 className="text-2xl font-semibold text-white">Wait for others</h2>
-          <p className="max-w-[300px] text-sm leading-6 text-white/58">
-            Everyone in the room needs to finish each food style before you continue together.
-          </p>
+          <p className="max-w-[300px] text-sm leading-6 text-white/58">Everyone finishes category swipes before the room moves on.</p>
           {membersStillSwipingCategories.length > 0 ? (
             <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-left">
               <p className="text-xs uppercase tracking-wide text-white/38">Still swiping</p>
@@ -3627,8 +3629,8 @@ function RoomScreen({
             </h2>
             <p className="mt-2 text-sm leading-6 text-white/58">
               {sharedMatchCategories.length > 0
-                ? "These are the food styles both of you liked. When you are ready, the host starts the restaurant pass."
-                : "No style was liked by both of you, so we will mix everyone’s likes to build the deck below. The host can still start the restaurant round."}
+                ? "Mutual likes — host starts restaurants when ready."
+                : "No mutual likes — we blend everyone’s likes for the deck. Host can still start restaurants."}
             </p>
           </div>
           {sharedMatchCategories.length > 0 ? (
@@ -3661,23 +3663,21 @@ function RoomScreen({
             </div>
           ) : null}
           {restaurantFocusCategories.length === 0 && sharedMatchCategories.length === 0 ? (
-            <p className="text-sm text-white/50">We will pull a broad set of places for your city.</p>
+            <p className="text-sm text-white/50">We’ll suggest a wide mix for your city.</p>
           ) : null}
           {isRoomHost ? (
             <button type="button" onClick={onStartRestaurantRound} className={primaryButtonClass}>
               Start — restaurants
             </button>
           ) : (
-            <p className="text-center text-sm text-white/50">Waiting for the host to start the restaurant round.</p>
+            <p className="text-center text-sm text-white/50">Waiting for host to start restaurants.</p>
           )}
         </div>
       ) : null}
 
       {stage === "categories" ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-          <p className="shrink-0 text-sm leading-snug text-white/70">
-            Tap styles you want for this city. Untick = pass. Saved rows stay locked.
-          </p>
+          <p className="shrink-0 text-sm leading-snug text-white/70">Like styles for this city. Uncheck = pass. Saved stays locked.</p>
 
           <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto overscroll-contain sm:gap-2.5">
             {categories.map((cat) => {
@@ -3749,11 +3749,7 @@ function RoomScreen({
             }}
             className={`${primaryButtonClass} shrink-0 text-base`}
           >
-            {categoryBatchSubmitting
-              ? "Saving…"
-              : pendingCategories.length > 0
-                ? "Next · save & show restaurants"
-                : "Next · continue"}
+            {categoryBatchSubmitting ? "Saving…" : pendingCategories.length > 0 ? "Save & next" : "Continue"}
           </button>
         </div>
       ) : null}
@@ -3791,10 +3787,7 @@ function RoomScreen({
             ) : loadedPlaceCount === 0 ? (
               <div className="rounded-2xl border border-amber-400/20 bg-amber-400/8 p-4 text-center">
                 <p className="text-sm font-medium text-white/88">No places loaded for {room?.city}</p>
-                <p className="mt-2 text-xs leading-relaxed text-white/55">
-                  The server needs a valid Google Maps key, or the search returned no results. You can retry the
-                  fetch.
-                </p>
+                <p className="mt-2 text-xs leading-relaxed text-white/55">Check Maps API key or try again.</p>
                 <button type="button" onClick={onRetryPlaces} className={`${primaryButtonCompactClass} mt-4`}>
                   Retry
                 </button>
@@ -3830,7 +3823,7 @@ function RoomScreen({
                         Show result
                       </button>
                     ) : (
-                      <p className="mt-2 text-xs leading-6 text-white/58">Waiting for host to show the final result.</p>
+                      <p className="mt-2 text-xs leading-6 text-white/58">Waiting for host to show results.</p>
                     )}
                   </>
                 ) : (
@@ -3861,7 +3854,7 @@ function RoomScreen({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-0.5 pb-2">
             <div className="space-y-4">
-              <div className="sticky top-0 z-10 -mx-0.5 mb-1 flex items-center gap-2 border-b border-white/10 bg-[#141117]/96 px-1 py-2 backdrop-blur-md">
+              <div className={`sticky top-0 z-10 -mx-0.5 mb-1 flex items-center gap-2 px-1 py-2 ${uiStickyBar}`}>
                 <button
                   type="button"
                   onClick={onBack}
@@ -3880,17 +3873,14 @@ function RoomScreen({
                 </button>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-white">Final picks</p>
-                  <p className="text-[10px] text-white/45">Tap ← to leave the room</p>
+                  <p className="text-[10px] text-white/45">← leaves the room</p>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/80">Top matches</p>
                 <h2 className="mt-1 text-lg font-semibold text-white">Liked by everyone</h2>
-                <p className="mt-2 text-sm leading-6 text-white/58">
-                  Same place, liked by every person in the room. Hero photo, then use View detail for full address and
-                  all photos.
-                </p>
+                <p className="mt-2 text-sm leading-6 text-white/58">Everyone liked these. Open a card for address and photos.</p>
               </div>
               <div className="space-y-3">
                 {mutualFinalRestaurants.length > 0 ? (
@@ -3909,9 +3899,7 @@ function RoomScreen({
                   <div className="rounded-2xl border border-white/12 bg-white/6 p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/45">Co-likes</p>
                     <h2 className="mt-1 text-lg font-semibold text-white">Liked by some of you</h2>
-                    <p className="mt-2 text-sm leading-6 text-white/55">
-                      At least two people liked these, but not the whole group. Names show who picked them.
-                    </p>
+                    <p className="mt-2 text-sm leading-6 text-white/55">Two or more liked — not everyone. Names show who.</p>
                   </div>
                   {partialCoLikedFinalRows.map(({ restaurant, likedByLabel }) => (
                     <FinalResultPlaceCard
@@ -3944,8 +3932,8 @@ function RoomScreen({
               partialCoLikedFinalRows.length === 0 &&
               soloLikedFinalRows.length === 0 ? (
                 <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
-                  No likes were recorded for this round, or we could not load place details.
-                  {isRoomHost ? " You can restart from categories or rerun only restaurants with the same room." : ""}
+                  No likes this round, or details didn’t load.
+                  {isRoomHost ? " Host can restart categories or restaurants." : ""}
                 </div>
               ) : null}
 
@@ -3987,7 +3975,7 @@ function RoomScreen({
           </div>
 
           <div className="rounded-[24px] bg-[linear-gradient(135deg,#ff7a18_0%,#ff4d8d_54%,#6a5cff_100%)] p-[1px]">
-            <div className="rounded-[23px] bg-[#161218] px-4 py-3">
+            <div className={`rounded-[23px] px-4 py-3 ${uiInset}`}>
               <p className="text-xs text-white/55">{isRoomHost ? "Your room is live" : "You are inside the room"}</p>
               <h1 className="mt-1.5 text-3xl font-semibold tracking-[0.14em] text-white">{room?.code}</h1>
               <p className="mt-1.5 text-xs text-white/58">
@@ -4030,9 +4018,7 @@ function RoomScreen({
                     {isRoomHost ? "Start when you are ready." : "Waiting for the host"}
                   </p>
                   <p className="mt-1.5 text-sm leading-snug text-white/58">
-                    {isRoomHost
-                      ? "When you start, everyone in the room moves to category picks together."
-                      : "The host starts the round. Your screen will switch to category picks automatically."}
+                    {isRoomHost ? "Start sends everyone to category picks." : "Host starts — you’ll follow automatically."}
                   </p>
                 </div>
 
@@ -4068,7 +4054,7 @@ function RoomScreen({
             />
             <span className="relative text-xs font-medium uppercase tracking-[0.32em] text-white/55">Starting</span>
           </div>
-          <p className="text-sm text-white/40">Preparing your swipe deck</p>
+          <p className="text-sm text-white/40">Preparing deck…</p>
         </div>
       ) : null}
 
@@ -4084,7 +4070,7 @@ function RoomScreen({
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-2">{swipeStages}</div>
           {stage === "categories" && (swipePickLabel || draftLikeIds.size > 0) ? (
-            <div className="shrink-0 max-h-11 overflow-hidden border-t border-white/10 bg-[#141117]/95 px-2 py-1">
+            <div className="shrink-0 max-h-11 overflow-hidden border-t border-white/10 bg-[#151119]/95 px-2 py-1">
               {draftLikeIds.size > 0 ? (
                 <p
                   className="truncate text-[10px] leading-tight text-white/55"
@@ -4113,7 +4099,7 @@ function RoomScreen({
             </div>
           ) : null}
           {stage === "restaurants" ? (
-            <div className="flex min-h-[2.5rem] shrink-0 flex-col justify-center border-t border-white/10 bg-[#141117]/95 px-2 py-1">
+            <div className="flex min-h-[2.5rem] shrink-0 flex-col justify-center border-t border-white/10 bg-[#151119]/95 px-2 py-1">
               {swipePickLabel ? (
                 <p className="truncate text-[10px] leading-tight text-white/70" title={swipePickLabel}>
                   <span className="text-white/35">Last:</span> {swipePickLabel}
@@ -4317,8 +4303,8 @@ function SwipePanel<T>({
       <div
         className={
           fillHeight
-            ? "relative flex-1 touch-pan-y select-none overflow-hidden rounded-[28px] bg-[#161218] min-h-0 max-h-full"
-            : "relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-pan-y select-none rounded-[28px] bg-[#161218] sm:h-[460px]"
+            ? `relative flex-1 touch-pan-y select-none overflow-hidden min-h-0 max-h-full ${uiSwipeDeck}`
+            : `relative h-[min(420px,58dvh)] min-h-[min(380px,52dvh)] touch-pan-y select-none sm:h-[460px] ${uiSwipeDeck}`
         }
       >
         {nextItem ? (
