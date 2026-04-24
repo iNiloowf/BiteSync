@@ -428,6 +428,7 @@ export function FoodMatchApp() {
   const [roomStage, setRoomStage] = useState<RoomStage>("lobby");
   const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
   const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
+  const [restaurantRoundMemberKeys, setRestaurantRoundMemberKeys] = useState<string[]>([]);
   const [swipePickLabel, setSwipePickLabel] = useState("");
   const [undoHidePlace, setUndoHidePlace] = useState<CityRestaurant | null>(null);
   const undoHidePlaceRef = useRef<CityRestaurant | null>(null);
@@ -767,47 +768,66 @@ export function FoodMatchApp() {
     [restaurantVotes],
   );
 
-  const restaurantActiveMembers = useMemo(() => {
-    if (distinctRoomMembers.length === 0) return [] as RoomMember[];
-    return distinctRoomMembers.filter((member) => {
-      const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
-      return Boolean(set && set.size > 0);
-    });
-  }, [distinctRoomMembers, memberRestaurantProgress]);
+  const restaurantRoundExpectedMemberKeys = useMemo(() => {
+    if (restaurantRoundMemberKeys.length > 0) return restaurantRoundMemberKeys;
+    return distinctRoomMembers.map((member) => roomMemberKey(member));
+  }, [restaurantRoundMemberKeys, distinctRoomMembers]);
+
+  const restaurantMembersByKey = useMemo(() => {
+    const byKey = new Map<string, RoomMember>();
+    for (const member of distinctRoomMembers) {
+      byKey.set(roomMemberKey(member), member);
+    }
+    return byKey;
+  }, [distinctRoomMembers]);
+
+  const myRestaurantVoteCount = useMemo(() => {
+    const ids = new Set(myRestaurantVotes.map((vote) => vote.restaurant_id));
+    return ids.size;
+  }, [myRestaurantVotes]);
 
   const restaurantRoundCompletionTarget = useMemo(() => {
     if (pendingRestaurants.length > 0) return 0;
-    const activeCounts = restaurantActiveMembers
-      .map((member) => memberRestaurantVotesSet(member, memberRestaurantProgress)?.size ?? 0)
+    if (myRestaurantVoteCount > 0) return myRestaurantVoteCount;
+    const activeCounts = restaurantRoundExpectedMemberKeys
+      .map((key) => memberRestaurantProgress.get(key)?.size ?? 0)
       .filter((size) => size > 0);
     if (activeCounts.length === 0) return 0;
-    return Math.min(...activeCounts);
-  }, [pendingRestaurants.length, restaurantActiveMembers, memberRestaurantProgress]);
+    return Math.max(...activeCounts);
+  }, [pendingRestaurants.length, myRestaurantVoteCount, restaurantRoundExpectedMemberKeys, memberRestaurantProgress]);
 
   const allMembersFinishedRestaurants = useMemo(() => {
     if (pendingRestaurants.length > 0) return false;
-    if (restaurantActiveMembers.length === 0) return memberCount <= 1;
+    if (restaurantRoundExpectedMemberKeys.length === 0) return memberCount <= 1;
     if (restaurantRoundCompletionTarget <= 0) return false;
-    return restaurantActiveMembers.every((member) => {
-      const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
-      return Boolean(set && set.size >= restaurantRoundCompletionTarget);
-    });
+    return restaurantRoundExpectedMemberKeys.every(
+      (key) => (memberRestaurantProgress.get(key)?.size ?? 0) >= restaurantRoundCompletionTarget,
+    );
   }, [
     pendingRestaurants.length,
     memberCount,
-    restaurantActiveMembers,
+    restaurantRoundExpectedMemberKeys,
     restaurantRoundCompletionTarget,
     memberRestaurantProgress,
   ]);
 
   const membersStillSwipingRestaurants = useMemo(() => {
-    if (restaurantActiveMembers.length === 0) return [] as RoomMember[];
-    if (restaurantRoundCompletionTarget <= 0) return restaurantActiveMembers;
-    return restaurantActiveMembers.filter((member) => {
-      const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
-      return !set || set.size < restaurantRoundCompletionTarget;
-    });
-  }, [restaurantActiveMembers, restaurantRoundCompletionTarget, memberRestaurantProgress]);
+    if (restaurantRoundExpectedMemberKeys.length === 0) return [] as RoomMember[];
+    if (restaurantRoundCompletionTarget <= 0) {
+      return restaurantRoundExpectedMemberKeys
+        .map((key) => restaurantMembersByKey.get(key))
+        .filter((member): member is RoomMember => Boolean(member));
+    }
+    return restaurantRoundExpectedMemberKeys
+      .filter((key) => (memberRestaurantProgress.get(key)?.size ?? 0) < restaurantRoundCompletionTarget)
+      .map((key) => restaurantMembersByKey.get(key))
+      .filter((member): member is RoomMember => Boolean(member));
+  }, [
+    restaurantRoundExpectedMemberKeys,
+    restaurantRoundCompletionTarget,
+    memberRestaurantProgress,
+    restaurantMembersByKey,
+  ]);
 
   const finalRestaurantIds = useMemo(
     () =>
@@ -850,6 +870,7 @@ export function FoodMatchApp() {
       const roomId = activeRoom.id;
       setCategoryVotes([]);
       setRestaurantVotes([]);
+      setRestaurantRoundMemberKeys([]);
       setSwipePickLabel("");
       setRoomStage("categories");
 
@@ -877,6 +898,7 @@ export function FoodMatchApp() {
     try {
       const roomId = activeRoom.id;
       setRestaurantVotes([]);
+      setRestaurantRoundMemberKeys([]);
       setSwipePickLabel("");
       setRoomStage("restaurants");
 
@@ -1049,6 +1071,7 @@ export function FoodMatchApp() {
     setRoomStage("lobby");
     setCategoryVotes([]);
     setRestaurantVotes([]);
+    setRestaurantRoundMemberKeys([]);
   }
 
   async function handleSaveProfile() {
@@ -1170,6 +1193,7 @@ export function FoodMatchApp() {
       setRoomStage("lobby");
       setCategoryVotes([]);
       setRestaurantVotes([]);
+      setRestaurantRoundMemberKeys([]);
       setRoomMembers([]);
       setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
@@ -1212,6 +1236,7 @@ export function FoodMatchApp() {
       setRoomStage("lobby");
       setCategoryVotes([]);
       setRestaurantVotes([]);
+      setRestaurantRoundMemberKeys([]);
       setRoomMembers([]);
       setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
@@ -1244,6 +1269,7 @@ export function FoodMatchApp() {
 
   const handleHostStartRestaurantRound = useCallback(() => {
     if (!isRoomHost) return;
+    setRestaurantRoundMemberKeys(distinctRoomMembers.map((member) => roomMemberKey(member)));
     setRoomStage("restaurants");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
@@ -1252,7 +1278,7 @@ export function FoodMatchApp() {
       });
       broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
     }
-  }, [isRoomHost, supabase, activeRoom?.id]);
+  }, [isRoomHost, distinctRoomMembers, supabase, activeRoom?.id]);
 
   async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
@@ -1898,6 +1924,14 @@ export function FoodMatchApp() {
     setRoomStage(allMembersFinishedCategories ? "category_match" : "waiting_categories");
   }, [activeRoom, roomStage, pendingCategories.length, memberCount, allMembersFinishedCategories]);
 
+  useEffect(() => {
+    if (roomStage !== "restaurants") return;
+    if (restaurantRoundMemberKeys.length > 0) return;
+    const keys = distinctRoomMembers.map((member) => roomMemberKey(member));
+    if (keys.length === 0) return;
+    setRestaurantRoundMemberKeys(keys);
+  }, [roomStage, restaurantRoundMemberKeys.length, distinctRoomMembers]);
+
   const restaurantFetchContextRef = useRef({
     roomStage,
     restaurantFocusCategoryIds,
@@ -2146,6 +2180,9 @@ export function FoodMatchApp() {
                 isRoomHost={isRoomHost}
                 stage={roomStage}
                 roomMembers={distinctRoomMembers}
+                expectedRestaurantMemberCount={restaurantRoundExpectedMemberKeys.length}
+                restaurantVotes={restaurantVotes}
+                myRestaurantVotes={myRestaurantVotes}
                 sharedMatchCategories={sharedMatchCategories}
                 restaurantFocusCategories={restaurantFocusCategories}
                 membersStillSwipingCategories={membersStillSwipingCategories}
@@ -2171,6 +2208,7 @@ export function FoodMatchApp() {
                   setSwipePickLabel("");
                   setScreen("home");
                   setRoomStage("lobby");
+                  setRestaurantRoundMemberKeys([]);
                 }}
               />
             ) : null}
@@ -3035,6 +3073,9 @@ function RoomScreen({
   isRoomHost,
   stage,
   roomMembers,
+  expectedRestaurantMemberCount,
+  restaurantVotes,
+  myRestaurantVotes,
   sharedMatchCategories,
   restaurantFocusCategories,
   membersStillSwipingCategories,
@@ -3062,6 +3103,9 @@ function RoomScreen({
   isRoomHost: boolean;
   stage: RoomStage;
   roomMembers: RoomMember[];
+  expectedRestaurantMemberCount: number;
+  restaurantVotes: RoomRestaurantVote[];
+  myRestaurantVotes: RoomRestaurantVote[];
   sharedMatchCategories: Category[];
   restaurantFocusCategories: Category[];
   membersStillSwipingCategories: RoomMember[];
@@ -3087,6 +3131,8 @@ function RoomScreen({
 }) {
   const currentRestaurant = pendingRestaurants[0] ?? null;
   const nextRestaurant = pendingRestaurants[1] ?? null;
+  const expectedMembers = Math.max(1, expectedRestaurantMemberCount || roomMembers.length || 1);
+  const stillWaitingCount = Math.max(0, membersStillSwipingRestaurants.length);
 
   const [enterSwipe, setEnterSwipe] = useState(false);
   const [draftLikeIds, setDraftLikeIds] = useState<Set<string>>(() => new Set());
@@ -3117,6 +3163,40 @@ function RoomScreen({
   const showLobbyChrome = stage === "lobby" && !enterSwipe;
   const showStartTransition = stage === "lobby" && enterSwipe;
   const immersive = stage !== "lobby";
+  const myLikedRestaurantIds = useMemo(
+    () => new Set(myRestaurantVotes.filter((vote) => vote.decision === "like").map((vote) => vote.restaurant_id)),
+    [myRestaurantVotes],
+  );
+  const othersLikedRestaurantIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const vote of restaurantVotes) {
+      if (vote.decision !== "like") continue;
+      if (myLikedRestaurantIds.has(vote.restaurant_id)) continue;
+      ids.add(vote.restaurant_id);
+    }
+    return ids;
+  }, [restaurantVotes, myLikedRestaurantIds]);
+  const restaurantById = useMemo(() => {
+    const byId = new Map<string, CityRestaurant>();
+    for (const r of [...pendingRestaurants, ...finalRestaurants]) {
+      byId.set(r.id, r);
+    }
+    return byId;
+  }, [pendingRestaurants, finalRestaurants]);
+  const myLikedRestaurants = useMemo(
+    () =>
+      [...myLikedRestaurantIds]
+        .map((id) => restaurantById.get(id))
+        .filter((r): r is CityRestaurant => Boolean(r)),
+    [myLikedRestaurantIds, restaurantById],
+  );
+  const othersLikedRestaurants = useMemo(
+    () =>
+      [...othersLikedRestaurantIds]
+        .map((id) => restaurantById.get(id))
+        .filter((r): r is CityRestaurant => Boolean(r)),
+    [othersLikedRestaurantIds, restaurantById],
+  );
 
   const swipeStages = (
     <>
@@ -3301,6 +3381,9 @@ function RoomScreen({
           <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
             {pendingRestaurants.length} left
           </div>
+          <p className="text-[11px] text-white/50">
+            Room participants: {expectedMembers} · waiting for {stillWaitingCount}
+          </p>
 
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {restaurantsLoading ? (
@@ -3355,6 +3438,9 @@ function RoomScreen({
                 ) : (
                   <>
                     <p className="text-xs font-medium text-white/80">You are done. Waiting for others.</p>
+                    <p className="mt-1 text-[11px] text-white/50">
+                      Waiting for {stillWaitingCount} of {expectedMembers} participants.
+                    </p>
                     {membersStillSwipingRestaurants.length > 0 ? (
                       <div className="mx-auto mt-2 w-full max-w-sm rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-left">
                         <p className="text-xs uppercase tracking-wide text-white/38">Still choosing restaurants</p>
@@ -3406,6 +3492,28 @@ function RoomScreen({
                   Restaurants liked by everyone in the room, highest rating first.
                 </p>
               </div>
+
+              {myLikedRestaurants.length > 0 ? (
+                <div className="rounded-2xl bg-white/6 p-4">
+                  <p className="text-sm font-semibold text-white">What you liked</p>
+                  <ul className="mt-2 space-y-1.5 text-sm text-white/80">
+                    {myLikedRestaurants.map((restaurant) => (
+                      <li key={`mine-${restaurant.id}`}>{restaurant.name}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {othersLikedRestaurants.length > 0 ? (
+                <div className="rounded-2xl bg-white/6 p-4">
+                  <p className="text-sm font-semibold text-white">Others liked</p>
+                  <ul className="mt-2 space-y-1.5 text-sm text-white/80">
+                    {othersLikedRestaurants.map((restaurant) => (
+                      <li key={`other-${restaurant.id}`}>{restaurant.name}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
 
               <div className="space-y-2">
                 {finalRestaurants.length > 0 ? (
@@ -3890,7 +3998,7 @@ function formatRoomCodeInput(value: string) {
     .replace(/[^0-9]/g, "")
     .slice(0, 3);
   if (!prefix) return "";
-  if (!suffix) return prefix;
+  if (!suffix) return prefix.length >= 4 ? `${prefix} - ` : prefix;
   return `${prefix} - ${suffix}`;
 }
 
