@@ -257,6 +257,38 @@ function memberCategoryVotesSet(
   return progress.get(normalizedMemberNameKey(member.name));
 }
 
+function buildMemberRestaurantProgress(votes: readonly RoomRestaurantVote[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const vote of votes) {
+    const primary = vote.user_id ? String(vote.user_id).trim() : normalizedMemberNameKey(vote.member_name);
+    if (!primary) continue;
+    let set = map.get(primary);
+    if (!set) {
+      set = new Set<string>();
+      map.set(primary, set);
+    }
+    set.add(vote.restaurant_id);
+    if (vote.user_id && vote.member_name?.trim()) {
+      const alt = normalizedMemberNameKey(vote.member_name);
+      if (alt !== primary) {
+        map.set(alt, set);
+      }
+    }
+  }
+  return map;
+}
+
+function memberRestaurantVotesSet(
+  member: RoomMember,
+  progress: ReadonlyMap<string, Set<string>>,
+): Set<string> | undefined {
+  if (member.user_id) {
+    const byId = progress.get(String(member.user_id).trim());
+    if (byId && byId.size > 0) return byId;
+  }
+  return progress.get(normalizedMemberNameKey(member.name));
+}
+
 type SupabaseBrowser = NonNullable<ReturnType<typeof getSupabaseBrowserClient>>;
 
 function mergeMemberRowsFromServer(serverRows: RoomMember[], previous: RoomMember[]): RoomMember[] {
@@ -730,6 +762,34 @@ export function FoodMatchApp() {
     [myRestaurantVotes, restaurantCandidates],
   );
 
+  const memberRestaurantProgress = useMemo(
+    () => buildMemberRestaurantProgress(restaurantVotes),
+    [restaurantVotes],
+  );
+
+  const allMembersFinishedRestaurants = useMemo(() => {
+    if (memberCount <= 1) return pendingRestaurants.length === 0;
+    if (distinctRoomMembers.length === 0) return false;
+    return distinctRoomMembers.every((member) => {
+      const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
+      return Boolean(set && set.size >= restaurantCandidates.length);
+    });
+  }, [
+    memberCount,
+    pendingRestaurants.length,
+    distinctRoomMembers,
+    memberRestaurantProgress,
+    restaurantCandidates.length,
+  ]);
+
+  const membersStillSwipingRestaurants = useMemo(() => {
+    if (memberCount <= 1) return [] as RoomMember[];
+    return distinctRoomMembers.filter((member) => {
+      const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
+      return !set || set.size < restaurantCandidates.length;
+    });
+  }, [memberCount, distinctRoomMembers, memberRestaurantProgress, restaurantCandidates.length]);
+
   const finalRestaurantIds = useMemo(
     () =>
       getSharedLikedIds({
@@ -759,6 +819,63 @@ export function FoodMatchApp() {
       .filter((r): r is CityRestaurant => Boolean(r))
       .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0));
   }, [finalRestaurantIds, restaurantCandidates, visibleCityRestaurants]);
+
+  const handleHostShowFinalResults = useCallback(() => {
+    if (!isRoomHost) return;
+    setRoomStage("final");
+  }, [isRoomHost]);
+
+  const handleHostRestartCategories = useCallback(async () => {
+    if (!supabase || !activeRoom || !isRoomHost) return;
+    try {
+      const roomId = activeRoom.id;
+      setCategoryVotes([]);
+      setRestaurantVotes([]);
+      setSwipePickLabel("");
+      setRoomStage("categories");
+
+      const { error: categoryDeleteError } = await supabase.from("room_category_votes").delete().eq("room_id", roomId);
+      if (categoryDeleteError) throw categoryDeleteError;
+
+      const { error: restaurantDeleteError } = await supabase
+        .from("room_restaurant_votes")
+        .delete()
+        .eq("room_id", roomId);
+      if (restaurantDeleteError) throw restaurantDeleteError;
+
+      const persistResult = await persistRoomFlowStage(supabase, roomId, "categories");
+      if (!persistResult.ok) {
+        setMessage(formatRoomFlowPersistUserMessage(persistResult.reason));
+      }
+      broadcastRoomFlowEvent(supabase, roomId, "categories_started");
+    } catch (error) {
+      setMessage(getErrorMessage(error, "Could not restart category round."));
+    }
+  }, [supabase, activeRoom, isRoomHost]);
+
+  const handleHostRestartRestaurants = useCallback(async () => {
+    if (!supabase || !activeRoom || !isRoomHost) return;
+    try {
+      const roomId = activeRoom.id;
+      setRestaurantVotes([]);
+      setSwipePickLabel("");
+      setRoomStage("restaurants");
+
+      const { error: restaurantDeleteError } = await supabase
+        .from("room_restaurant_votes")
+        .delete()
+        .eq("room_id", roomId);
+      if (restaurantDeleteError) throw restaurantDeleteError;
+
+      const persistResult = await persistRoomFlowStage(supabase, roomId, "restaurants");
+      if (!persistResult.ok) {
+        setMessage(formatRoomFlowPersistUserMessage(persistResult.reason));
+      }
+      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
+    } catch (error) {
+      setMessage(getErrorMessage(error, "Could not restart restaurant round."));
+    }
+  }, [supabase, activeRoom, isRoomHost]);
 
   const loadProfile = useCallback(
     async (user: User) => {
@@ -1251,19 +1368,6 @@ export function FoodMatchApp() {
     setSwipePickLabel(`${decision === "like" ? "Liked" : "Passed"} · ${place?.name ?? restaurantId}`);
 
     if (alreadyVoted) {
-      const myIds = new Set(
-        restaurantVotes
-          .filter(
-            (vote) =>
-              vote.user_id === currentUserId ||
-              (vote.user_id == null && vote.member_name === profile.full_name),
-          )
-          .map((v) => v.restaurant_id),
-      );
-      const remaining = restaurantCandidates.filter((r) => !myIds.has(r.id));
-      if (remaining.length === 0) {
-        setRoomStage("final");
-      }
       return;
     }
 
@@ -1277,23 +1381,6 @@ export function FoodMatchApp() {
       });
 
       if (insertError) throw insertError;
-
-      setRestaurantVotes((prev) => {
-        const myIds = new Set(
-          prev
-            .filter(
-              (vote) =>
-                vote.user_id === currentUserId ||
-                (vote.user_id == null && vote.member_name === profile.full_name),
-            )
-            .map((v) => v.restaurant_id),
-        );
-        const remaining = restaurantCandidates.filter((r) => !myIds.has(r.id));
-        if (remaining.length === 0) {
-          queueMicrotask(() => setRoomStage("final"));
-        }
-        return prev;
-      });
     } catch (error) {
       setRestaurantVotes((prev) => prev.filter((v) => v.id !== optimisticId));
       setMessage(getErrorMessage(error, "Could not save your restaurant vote."));
@@ -2034,11 +2121,11 @@ export function FoodMatchApp() {
                 isRoomHost={isRoomHost}
                 stage={roomStage}
                 roomMembers={distinctRoomMembers}
-                restaurantVotes={restaurantVotes}
-                sharedCategoryIds={sharedCategoryIds}
                 sharedMatchCategories={sharedMatchCategories}
                 restaurantFocusCategories={restaurantFocusCategories}
                 membersStillSwipingCategories={membersStillSwipingCategories}
+                membersStillSwipingRestaurants={membersStillSwipingRestaurants}
+                allMembersFinishedRestaurants={allMembersFinishedRestaurants}
                 pendingCategories={pendingCategories}
                 pendingRestaurants={pendingRestaurants}
                 finalRestaurants={finalRestaurants}
@@ -2047,10 +2134,12 @@ export function FoodMatchApp() {
                 swipePickLabel={swipePickLabel}
                 myCategoryVotes={myCategoryVotes}
                 onStart={handleHostStartCategories}
-                onChangeStage={setRoomStage}
                 onStartRestaurantRound={handleHostStartRestaurantRound}
                 onCategoryBatchSubmit={handleCategoryBatchSubmit}
                 onRestaurantDecision={handleRestaurantDecision}
+                onShowFinalResults={handleHostShowFinalResults}
+                onRestartCategories={handleHostRestartCategories}
+                onRestartRestaurants={handleHostRestartRestaurants}
                 onHideRestaurantForever={hasSupabaseEnv ? hideRestaurantForever : undefined}
                 onRetryPlaces={() => setPlacesFetchNonce((n) => n + 1)}
                 onBack={() => {
@@ -2902,11 +2991,11 @@ function RoomScreen({
   isRoomHost,
   stage,
   roomMembers,
-  restaurantVotes,
-  sharedCategoryIds,
   sharedMatchCategories,
   restaurantFocusCategories,
   membersStillSwipingCategories,
+  membersStillSwipingRestaurants,
+  allMembersFinishedRestaurants,
   pendingCategories,
   pendingRestaurants,
   finalRestaurants,
@@ -2915,10 +3004,12 @@ function RoomScreen({
   swipePickLabel,
   myCategoryVotes,
   onStart,
-  onChangeStage,
   onStartRestaurantRound,
   onCategoryBatchSubmit,
   onRestaurantDecision,
+  onShowFinalResults,
+  onRestartCategories,
+  onRestartRestaurants,
   onHideRestaurantForever,
   onRetryPlaces,
   onBack,
@@ -2927,11 +3018,11 @@ function RoomScreen({
   isRoomHost: boolean;
   stage: RoomStage;
   roomMembers: RoomMember[];
-  restaurantVotes: RoomRestaurantVote[];
-  sharedCategoryIds: string[];
   sharedMatchCategories: Category[];
   restaurantFocusCategories: Category[];
   membersStillSwipingCategories: RoomMember[];
+  membersStillSwipingRestaurants: RoomMember[];
+  allMembersFinishedRestaurants: boolean;
   pendingCategories: typeof categories;
   pendingRestaurants: CityRestaurant[];
   finalRestaurants: CityRestaurant[];
@@ -2940,10 +3031,12 @@ function RoomScreen({
   swipePickLabel: string;
   myCategoryVotes: RoomCategoryVote[];
   onStart: () => void;
-  onChangeStage: (value: RoomStage) => void;
   onStartRestaurantRound: () => void;
   onCategoryBatchSubmit: (likeIds: readonly string[]) => Promise<void>;
   onRestaurantDecision: (restaurantId: string, decision: "like" | "skip") => void | Promise<void>;
+  onShowFinalResults: () => void;
+  onRestartCategories: () => void | Promise<void>;
+  onRestartRestaurants: () => void | Promise<void>;
   onHideRestaurantForever?: (restaurant: CityRestaurant) => void | Promise<void>;
   onRetryPlaces: () => void;
   onBack: () => void;
@@ -3200,14 +3293,36 @@ function RoomScreen({
               />
             ) : (
               <div className="rounded-2xl bg-white/6 p-3 text-center">
-                <p className="text-xs font-medium text-white/80">Restaurant round complete.</p>
-                <button
-                  type="button"
-                  onClick={() => onChangeStage("final")}
-                  className={`${primaryButtonCompactClass} mt-3`}
-                >
-                  Show final picks
-                </button>
+                {allMembersFinishedRestaurants ? (
+                  <>
+                    <p className="text-xs font-medium text-white/80">Everyone finished restaurant picks.</p>
+                    {isRoomHost ? (
+                      <button
+                        type="button"
+                        onClick={onShowFinalResults}
+                        className={`${primaryButtonCompactClass} mt-3`}
+                      >
+                        Show result
+                      </button>
+                    ) : (
+                      <p className="mt-2 text-xs leading-6 text-white/58">Waiting for host to show the final result.</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs font-medium text-white/80">You are done. Waiting for others.</p>
+                    {membersStillSwipingRestaurants.length > 0 ? (
+                      <div className="mx-auto mt-2 w-full max-w-sm rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-left">
+                        <p className="text-xs uppercase tracking-wide text-white/38">Still choosing restaurants</p>
+                        <ul className="mt-2 space-y-1.5 text-sm text-white/85">
+                          {membersStillSwipingRestaurants.map((member) => (
+                            <li key={roomMemberKey(member)}>{member.name}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -3266,11 +3381,22 @@ function RoomScreen({
                   ))
                 ) : (
                   <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
-                    No restaurant has been liked by everyone yet. Keep swiping or wait for the rest of the room to
-                    finish.
+                    No restaurant was liked by everyone in this room.
+                    {isRoomHost ? " You can restart from categories or rerun only restaurants with the same room." : ""}
                   </div>
                 )}
               </div>
+
+              {finalRestaurants.length === 0 && isRoomHost ? (
+                <>
+                  <button type="button" onClick={onRestartCategories} className={primaryButtonClass}>
+                    Choose food category again
+                  </button>
+                  <button type="button" onClick={onRestartRestaurants} className={ghostButtonClass}>
+                    Choose restaurants again
+                  </button>
+                </>
+              ) : null}
 
               <button type="button" onClick={onBack} className={ghostButtonClass}>
                 Done — back to home
