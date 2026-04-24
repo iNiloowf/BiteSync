@@ -4,7 +4,8 @@ import { createPortal } from "react-dom";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
 
-import { categories, countries, type Category } from "@/data/mock-data";
+import { categories, type Category } from "@/data/categories";
+import { countries } from "@/data/countries";
 import { getSupabaseBrowserClient, hasSupabaseEnv, supabaseConfigError } from "@/lib/supabase";
 
 const uiPage =

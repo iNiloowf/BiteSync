@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { categories } from "@/data/mock-data";
+import { categories } from "@/data/categories";
 
 const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
 
