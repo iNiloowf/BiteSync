@@ -1816,7 +1816,11 @@ export function FoodMatchApp() {
       if (!active) return;
       if (error) return;
       const keys = ((data as { participant_key: string }[] | null) ?? []).map((row) => row.participant_key);
-      setRestaurantFinishedMemberKeys([...new Set(keys)]);
+      setRestaurantFinishedMemberKeys((prev) => {
+        const next = new Set(prev);
+        for (const k of keys) next.add(k);
+        return [...next];
+      });
     }
 
     void loadCategoryVotes();
@@ -1986,9 +1990,16 @@ export function FoodMatchApp() {
         { onConflict: "room_id,participant_key" },
       )
       .then(({ error }) => {
-        if (error && /relation|does not exist|schema cache/i.test(error.message ?? "")) {
-          /* migration not applied yet */
+        if (!error) return;
+        if (/relation|does not exist|schema cache/i.test(error.message ?? "")) {
+          return;
         }
+        setMessage(
+          getErrorMessage(
+            error,
+            "Could not record that you finished restaurants. Check Supabase policies for room_restaurant_pass_complete (insert + update for upsert).",
+          ),
+        );
       });
   }, [
     roomStage,
@@ -1999,6 +2010,46 @@ export function FoodMatchApp() {
     activeRoom?.id,
     getRestaurantPassCompleteTable,
   ]);
+
+  useEffect(() => {
+    if (!supabase || !activeRoom) {
+      return;
+    }
+    if (roomStage !== "restaurants") {
+      return;
+    }
+    if (memberCount <= 1) {
+      return;
+    }
+    const client = supabase;
+    const roomId = activeRoom.id;
+    let active = true;
+    const pollPass = () => {
+      void (async () => {
+        const { data, error } = await client
+          .from("room_restaurant_pass_complete")
+          .select("participant_key")
+          .eq("room_id", roomId);
+        if (!active || error) {
+          return;
+        }
+        const keys = ((data as { participant_key: string }[] | null) ?? []).map((row) => row.participant_key);
+        setRestaurantFinishedMemberKeys((prev) => {
+          const next = new Set(prev);
+          for (const k of keys) {
+            next.add(k);
+          }
+          return [...next];
+        });
+      })();
+    };
+    pollPass();
+    const intervalId = window.setInterval(pollPass, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [supabase, activeRoom, roomStage, memberCount]);
 
   const restaurantFetchContextRef = useRef({
     roomStage,
