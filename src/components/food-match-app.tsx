@@ -1618,7 +1618,7 @@ export function FoodMatchApp() {
       )
       .on("broadcast", { event: "categories_started" }, () => {
         if (!active) return;
-        applyRemoteFlowStage("categories");
+        setRoomStage("categories");
       })
       .on("broadcast", { event: "restaurants_started" }, () => {
         if (!active) return;
