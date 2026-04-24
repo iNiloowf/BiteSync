@@ -2997,6 +2997,79 @@ function placePhotoWithSize(src: string, w: number, h: number) {
   }
 }
 
+/** Text passed to delivery sites’ search (name + locality from address). */
+function deliverySearchQuery(restaurant: CityRestaurant): string {
+  const name = restaurant.name?.trim() || "restaurant";
+  const addr = restaurant.address?.trim();
+  if (!addr) return name;
+  const tail = addr.split(",").slice(-3).join(",").trim();
+  const combined = tail ? `${name} ${tail}` : `${name} ${addr}`;
+  return combined.length > 140 ? combined.slice(0, 137).trimEnd() + "…" : combined;
+}
+
+function ubereatsSearchUrl(query: string, countryCode: string): string {
+  const q = encodeURIComponent(query);
+  const cc = countryCode.toUpperCase();
+  if (cc === "CA") return `https://www.ubereats.com/ca/search?q=${q}`;
+  if (cc === "GB" || cc === "UK") return `https://www.ubereats.com/gb/search?q=${q}`;
+  if (cc === "AU") return `https://www.ubereats.com/au/search?q=${q}`;
+  return `https://www.ubereats.com/search?q=${q}`;
+}
+
+function doordashSearchUrl(query: string, countryCode: string): string {
+  const q = encodeURIComponent(query);
+  const cc = countryCode.toUpperCase();
+  if (cc === "CA") return `https://www.doordash.com/en-CA/search?query=${q}`;
+  if (cc === "AU") return `https://www.doordash.com/en-AU/search?query=${q}`;
+  return `https://www.doordash.com/search?query=${q}`;
+}
+
+function skipthedishesSearchUrl(query: string): string {
+  return `https://www.skipthedishes.com/search?q=${encodeURIComponent(query)}`;
+}
+
+function DeliveryOrderLinks({ restaurant, countryCode }: { restaurant: CityRestaurant; countryCode: string }) {
+  const query = deliverySearchQuery(restaurant);
+  const cc = countryCode?.trim() || "US";
+  const ue = ubereatsSearchUrl(query, cc);
+  const dd = doordashSearchUrl(query, cc);
+  const st = skipthedishesSearchUrl(query);
+  const linkClass =
+    "inline-flex min-h-[2.5rem] flex-1 items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2 text-center text-[11px] font-semibold leading-tight text-white/95 shadow-sm transition hover:brightness-[1.08] active:scale-[0.98] sm:text-xs";
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Order online</p>
+      <p className="text-[10px] leading-snug text-white/38">New tab — provider search for this spot.</p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <a
+          href={ue}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${linkClass} border-emerald-400/35 bg-emerald-600/20 text-emerald-50`}
+        >
+          Uber Eats
+        </a>
+        <a
+          href={dd}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${linkClass} border-rose-400/35 bg-rose-600/22 text-rose-50`}
+        >
+          DoorDash
+        </a>
+        <a
+          href={st}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${linkClass} border-orange-400/35 bg-orange-600/20 text-orange-50`}
+        >
+          SkipTheDishes
+        </a>
+      </div>
+    </div>
+  );
+}
+
 const RestaurantSwipeCard = memo(function RestaurantSwipeCardInner({
   restaurant,
   heroImagePriority = "low",
@@ -3371,9 +3444,11 @@ const finalResultDetailOpenButtonClass =
 const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
   restaurant,
   likedByLine,
+  countryCode,
 }: {
   restaurant: CityRestaurant;
   likedByLine?: string;
+  countryCode: string;
 }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const photos = restaurant.photoUrls ?? [];
@@ -3427,6 +3502,9 @@ const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
             {likedByLine ? (
               <p className="mt-2 text-xs font-medium text-emerald-200/90">{likedByLine}</p>
             ) : null}
+            <div className="mt-4">
+              <DeliveryOrderLinks restaurant={restaurant} countryCode={countryCode} />
+            </div>
             {photos.length > 0 ? (
               <div className="mt-4 space-y-2">
                 <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Photos</p>
@@ -3483,6 +3561,7 @@ const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
           </div>
           {likedByLine ? <p className="text-xs font-medium text-emerald-200/90">{likedByLine}</p> : null}
           <p className="line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
+          <DeliveryOrderLinks restaurant={restaurant} countryCode={countryCode} />
           <button type="button" onClick={() => setDetailOpen(true)} className={finalResultDetailOpenButtonClass}>
             View detail
           </button>
@@ -3885,7 +3964,11 @@ function RoomScreen({
               <div className="space-y-3">
                 {mutualFinalRestaurants.length > 0 ? (
                   mutualFinalRestaurants.map((restaurant) => (
-                    <FinalResultPlaceCard key={`mutual-${restaurant.id}`} restaurant={restaurant} />
+                    <FinalResultPlaceCard
+                      key={`mutual-${restaurant.id}`}
+                      restaurant={restaurant}
+                      countryCode={room?.country_code ?? "US"}
+                    />
                   ))
                 ) : (
                   <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
@@ -3906,6 +3989,7 @@ function RoomScreen({
                       key={`partial-${restaurant.id}`}
                       restaurant={restaurant}
                       likedByLine={`Liked by ${likedByLabel}`}
+                      countryCode={room?.country_code ?? "US"}
                     />
                   ))}
                 </div>
@@ -3923,6 +4007,7 @@ function RoomScreen({
                       key={`solo-${restaurant.id}`}
                       restaurant={restaurant}
                       likedByLine={`Only ${likedByLabel}`}
+                      countryCode={room?.country_code ?? "US"}
                     />
                   ))}
                 </div>
