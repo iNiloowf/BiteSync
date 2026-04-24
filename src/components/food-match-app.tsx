@@ -185,6 +185,19 @@ function normalizedMemberNameKey(name: string): string {
   return `n:${name.trim().toLowerCase()}`;
 }
 
+/** Stable key for restaurant-pass completion; must match between room roster and who upserts to DB. */
+function restaurantPassParticipantKey(member: RoomMember): string {
+  if (member.user_id) return `u:${String(member.user_id).trim()}`;
+  return normalizedMemberNameKey(member.name);
+}
+
+function restaurantPassParticipantKeyForSelf(userId: string | null | undefined, displayName: string | undefined): string | null {
+  if (userId) return `u:${String(userId).trim()}`;
+  const n = displayName?.trim();
+  if (!n) return null;
+  return normalizedMemberNameKey(n);
+}
+
 function categoryVoteKey(vote: RoomCategoryVote): string {
   if (vote.user_id) return String(vote.user_id).trim();
   if (vote.member_name) return normalizedMemberNameKey(vote.member_name);
@@ -753,13 +766,13 @@ export function FoodMatchApp() {
 
   const restaurantRoundExpectedMemberKeys = useMemo(() => {
     if (restaurantRoundMemberKeys.length > 0) return restaurantRoundMemberKeys;
-    return [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
+    return [...new Set(distinctRoomMembers.map((member) => restaurantPassParticipantKey(member)))];
   }, [restaurantRoundMemberKeys, distinctRoomMembers]);
 
-  const restaurantMembersByKey = useMemo(() => {
+  const restaurantMembersByPassKey = useMemo(() => {
     const byKey = new Map<string, RoomMember>();
     for (const member of distinctRoomMembers) {
-      const key = normalizedMemberNameKey(member.name);
+      const key = restaurantPassParticipantKey(member);
       if (!byKey.has(key)) byKey.set(key, member);
     }
     return byKey;
@@ -780,9 +793,9 @@ export function FoodMatchApp() {
     if (restaurantRoundExpectedMemberKeys.length === 0) return [] as RoomMember[];
     return restaurantRoundExpectedMemberKeys
       .filter((key) => !restaurantFinishedSet.has(key))
-      .map((key) => restaurantMembersByKey.get(key))
+      .map((key) => restaurantMembersByPassKey.get(key))
       .filter((member): member is RoomMember => Boolean(member));
-  }, [restaurantRoundExpectedMemberKeys, restaurantMembersByKey, restaurantFinishedSet]);
+  }, [restaurantRoundExpectedMemberKeys, restaurantMembersByPassKey, restaurantFinishedSet]);
 
   const finalRestaurantIds = useMemo(
     () =>
@@ -858,8 +871,9 @@ export function FoodMatchApp() {
     if (!supabase || !activeRoom || !isRoomHost) return;
     try {
       const roomId = activeRoom.id;
+      const memberKeys = [...new Set(distinctRoomMembers.map((member) => restaurantPassParticipantKey(member)))];
       setRestaurantVotes([]);
-      setRestaurantRoundMemberKeys([]);
+      setRestaurantRoundMemberKeys(memberKeys);
       setRestaurantFinishedMemberKeys([]);
       setSwipePickLabel("");
       setRoomStage("restaurants");
@@ -879,11 +893,11 @@ export function FoodMatchApp() {
       if (!persistResult.ok) {
         setMessage(formatRoomFlowPersistUserMessage(persistResult.reason));
       }
-      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
+      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started", { member_keys: memberKeys });
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not restart restaurant round."));
     }
-  }, [supabase, activeRoom, isRoomHost, getRestaurantPassCompleteTable]);
+  }, [supabase, activeRoom, isRoomHost, getRestaurantPassCompleteTable, distinctRoomMembers]);
 
   const loadProfile = useCallback(
     async (user: User) => {
@@ -1239,7 +1253,7 @@ export function FoodMatchApp() {
 
   const handleHostStartRestaurantRound = useCallback(() => {
     if (!isRoomHost) return;
-    const memberKeys = [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
+    const memberKeys = [...new Set(distinctRoomMembers.map((member) => restaurantPassParticipantKey(member)))];
     setRestaurantRoundMemberKeys(memberKeys);
     setRestaurantFinishedMemberKeys([]);
     setRoomStage("restaurants");
@@ -1664,7 +1678,7 @@ export function FoodMatchApp() {
               setRestaurantRoundMemberKeys([...new Set(incoming.map((row) => row.trim()))]);
             } else {
               setRestaurantRoundMemberKeys(
-                [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
+                [...new Set(distinctRoomMembers.map((member) => restaurantPassParticipantKey(member)))],
               );
             }
             applyRemoteFlowStage("restaurants");
@@ -1951,17 +1965,16 @@ export function FoodMatchApp() {
   useEffect(() => {
     if (roomStage !== "restaurants") return;
     if (restaurantRoundMemberKeys.length > 0) return;
-    const keys = [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
+    const keys = [...new Set(distinctRoomMembers.map((member) => restaurantPassParticipantKey(member)))];
     if (keys.length === 0) return;
     setRestaurantRoundMemberKeys(keys);
   }, [roomStage, restaurantRoundMemberKeys.length, distinctRoomMembers]);
 
   useEffect(() => {
     if (roomStage !== "restaurants") return;
-    const myName = profile?.full_name?.trim();
-    if (!myName) return;
     if (pendingRestaurants.length > 0) return;
-    const memberKey = normalizedMemberNameKey(myName);
+    const memberKey = restaurantPassParticipantKeyForSelf(currentUserId, profile?.full_name);
+    if (!memberKey) return;
     setRestaurantFinishedMemberKeys((prev) => (prev.includes(memberKey) ? prev : [...prev, memberKey]));
     if (!supabase || !activeRoom?.id) return;
     const passComplete = getRestaurantPassCompleteTable();
@@ -1980,6 +1993,7 @@ export function FoodMatchApp() {
     roomStage,
     pendingRestaurants.length,
     profile?.full_name,
+    currentUserId,
     supabase,
     activeRoom?.id,
     getRestaurantPassCompleteTable,
