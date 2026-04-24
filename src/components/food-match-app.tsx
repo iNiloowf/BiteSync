@@ -767,28 +767,42 @@ export function FoodMatchApp() {
     [restaurantVotes],
   );
 
+  const myRestaurantVoteCount = useMemo(() => {
+    const ids = new Set(myRestaurantVotes.map((vote) => vote.restaurant_id));
+    return ids.size;
+  }, [myRestaurantVotes]);
+
+  const restaurantRoundCompletionTarget = useMemo(() => {
+    if (myRestaurantVoteCount > 0) return myRestaurantVoteCount;
+    const allVotedIds = new Set(restaurantVotes.map((vote) => vote.restaurant_id));
+    return allVotedIds.size;
+  }, [myRestaurantVoteCount, restaurantVotes]);
+
   const allMembersFinishedRestaurants = useMemo(() => {
-    if (memberCount <= 1) return pendingRestaurants.length === 0;
+    if (pendingRestaurants.length > 0) return false;
+    if (memberCount <= 1) return true;
+    if (restaurantRoundCompletionTarget <= 0) return false;
     if (distinctRoomMembers.length === 0) return false;
     return distinctRoomMembers.every((member) => {
       const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
-      return Boolean(set && set.size >= restaurantCandidates.length);
+      return Boolean(set && set.size >= restaurantRoundCompletionTarget);
     });
   }, [
-    memberCount,
     pendingRestaurants.length,
+    memberCount,
+    restaurantRoundCompletionTarget,
     distinctRoomMembers,
     memberRestaurantProgress,
-    restaurantCandidates.length,
   ]);
 
   const membersStillSwipingRestaurants = useMemo(() => {
     if (memberCount <= 1) return [] as RoomMember[];
+    if (restaurantRoundCompletionTarget <= 0) return distinctRoomMembers;
     return distinctRoomMembers.filter((member) => {
       const set = memberRestaurantVotesSet(member, memberRestaurantProgress);
-      return !set || set.size < restaurantCandidates.length;
+      return !set || set.size < restaurantRoundCompletionTarget;
     });
-  }, [memberCount, distinctRoomMembers, memberRestaurantProgress, restaurantCandidates.length]);
+  }, [memberCount, restaurantRoundCompletionTarget, distinctRoomMembers, memberRestaurantProgress]);
 
   const finalRestaurantIds = useMemo(
     () =>
