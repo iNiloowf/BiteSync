@@ -799,16 +799,52 @@ export function FoodMatchApp() {
       .filter((member): member is RoomMember => Boolean(member));
   }, [restaurantRoundExpectedMemberKeys, restaurantMembersByPassKey, restaurantFinishedSet]);
 
-  const finalRestaurantIds = useMemo(
-    () =>
-      getSharedLikedIds({
+  const strictMutualRestaurantIds = useMemo(() => {
+    if (memberCount <= 1) return [] as string[];
+    return getSharedLikedIds({
+      votes: restaurantVotes,
+      itemKey: "restaurant_id",
+      memberCount,
+      fallbackVotes: myRestaurantVotes,
+    });
+  }, [memberCount, myRestaurantVotes, restaurantVotes]);
+
+  const finalRestaurantIds = useMemo(() => {
+    if (memberCount <= 1) {
+      return getSharedLikedIds({
         votes: restaurantVotes,
         itemKey: "restaurant_id",
         memberCount,
         fallbackVotes: myRestaurantVotes,
-      }),
-    [memberCount, myRestaurantVotes, restaurantVotes],
+      });
+    }
+    if (strictMutualRestaurantIds.length > 0) {
+      return strictMutualRestaurantIds;
+    }
+    const union = new Set<string>();
+    for (const v of restaurantVotes) {
+      if (v.decision === "like") union.add(v.restaurant_id);
+    }
+    return [...union];
+  }, [memberCount, myRestaurantVotes, restaurantVotes, strictMutualRestaurantIds]);
+
+  const finalRestaurantsUnionFallback = useMemo(
+    () => memberCount > 1 && strictMutualRestaurantIds.length === 0 && finalRestaurantIds.length > 0,
+    [memberCount, strictMutualRestaurantIds.length, finalRestaurantIds.length],
   );
+
+  const restaurantDisplayPool = useMemo(() => {
+    const byId = new Map<string, CityRestaurant>();
+    for (const r of restaurantCandidates) {
+      byId.set(r.id, r);
+    }
+    for (const r of visibleCityRestaurants) {
+      if (!byId.has(r.id)) {
+        byId.set(r.id, r);
+      }
+    }
+    return [...byId.values()];
+  }, [restaurantCandidates, visibleCityRestaurants]);
 
   const finalRestaurants = useMemo(() => {
     if (finalRestaurantIds.length === 0) return [];
@@ -2310,6 +2346,8 @@ export function FoodMatchApp() {
                 pendingCategories={pendingCategories}
                 pendingRestaurants={pendingRestaurants}
                 finalRestaurants={finalRestaurants}
+                finalRestaurantsUnionFallback={finalRestaurantsUnionFallback}
+                restaurantDisplayPool={restaurantDisplayPool}
                 restaurantsLoading={restaurantsLoading}
                 loadedPlaceCount={visibleCityRestaurants.length}
                 swipePickLabel={swipePickLabel}
@@ -3204,6 +3242,8 @@ function RoomScreen({
   pendingCategories,
   pendingRestaurants,
   finalRestaurants,
+  finalRestaurantsUnionFallback,
+  restaurantDisplayPool,
   restaurantsLoading,
   loadedPlaceCount,
   swipePickLabel,
@@ -3234,6 +3274,8 @@ function RoomScreen({
   pendingCategories: typeof categories;
   pendingRestaurants: CityRestaurant[];
   finalRestaurants: CityRestaurant[];
+  finalRestaurantsUnionFallback: boolean;
+  restaurantDisplayPool: CityRestaurant[];
   restaurantsLoading: boolean;
   loadedPlaceCount: number;
   swipePickLabel: string;
@@ -3298,11 +3340,14 @@ function RoomScreen({
   }, [restaurantVotes, myLikedRestaurantIds]);
   const restaurantById = useMemo(() => {
     const byId = new Map<string, CityRestaurant>();
+    for (const r of restaurantDisplayPool) {
+      byId.set(r.id, r);
+    }
     for (const r of [...pendingRestaurants, ...finalRestaurants]) {
       byId.set(r.id, r);
     }
     return byId;
-  }, [pendingRestaurants, finalRestaurants]);
+  }, [restaurantDisplayPool, pendingRestaurants, finalRestaurants]);
   const myLikedRestaurants = useMemo(
     () =>
       [...myLikedRestaurantIds]
@@ -3607,9 +3652,13 @@ function RoomScreen({
               </div>
 
               <div className="rounded-2xl bg-white/6 p-4">
-                <p className="text-lg font-semibold text-white">{"Everyone's picks"}</p>
+                <p className="text-lg font-semibold text-white">
+                  {finalRestaurantsUnionFallback ? "All likes in the room" : "Everyone's picks"}
+                </p>
                 <p className="mt-2 text-sm leading-6 text-white/58">
-                  Restaurants liked by everyone in the room, highest rating first.
+                  {finalRestaurantsUnionFallback
+                    ? "No single place was liked by everyone, so we list every restaurant someone liked, best rated first."
+                    : "Restaurants liked by everyone in the room, highest rating first."}
                 </p>
               </div>
 
@@ -3653,7 +3702,7 @@ function RoomScreen({
                   ))
                 ) : (
                   <div className="rounded-2xl bg-white/6 p-4 text-sm leading-6 text-white/58">
-                    No restaurant was liked by everyone in this room.
+                    No likes were recorded for this round, or we could not load place details.
                     {isRoomHost ? " You can restart from categories or rerun only restaurants with the same room." : ""}
                   </div>
                 )}
