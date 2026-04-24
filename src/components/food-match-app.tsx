@@ -1227,7 +1227,9 @@ export function FoodMatchApp() {
       void persistRoomFlowStage(supabase, roomId, "restaurants").then((r) => {
         if (!r.ok) setMessage(formatRoomFlowPersistUserMessage(r.reason));
       });
-      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started");
+      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started", {
+        member_keys: [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
+      });
     }
   }, [isRoomHost, distinctRoomMembers, supabase, activeRoom?.id]);
 
@@ -1620,13 +1622,26 @@ export function FoodMatchApp() {
       })
       .on("broadcast", { event: "restaurants_started" }, () => {
         if (!active) return;
-        setRestaurantFinishedMemberKeys([]);
-        restaurantFinishBroadcastedRef.current = false;
-        setRestaurantRoundMemberKeys(
-          [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
-        );
-        applyRemoteFlowStage("restaurants");
-      })
+      .on(
+        "broadcast",
+        { event: "restaurants_started" },
+        ({ payload }: { payload?: { member_keys?: unknown } }) => {
+          if (!active) return;
+          setRestaurantFinishedMemberKeys([]);
+          restaurantFinishBroadcastedRef.current = false;
+          const incoming = Array.isArray(payload?.member_keys)
+            ? payload.member_keys.filter((row): row is string => typeof row === "string" && row.trim().length > 0)
+            : [];
+          if (incoming.length > 0) {
+            setRestaurantRoundMemberKeys([...new Set(incoming.map((row) => row.trim()))]);
+          } else {
+            setRestaurantRoundMemberKeys(
+              [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
+            );
+          }
+          applyRemoteFlowStage("restaurants");
+        },
+      )
       .on(
         "broadcast",
         { event: "restaurant_member_finished" },
