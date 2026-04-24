@@ -409,6 +409,13 @@ async function persistRoomFlowStage(
 
 function formatRoomFlowPersistUserMessage(reason: string) {
   const head = `Could not sync room for other players: ${reason}.`;
+  if (
+    /rooms_flow_stage_check|violates check constraint.*rooms|invalid flow_stage|new row for relation "rooms"/i.test(
+      reason,
+    )
+  ) {
+    return `${head} Your database still only allows flow_stage lobby/categories/restaurants. In the Supabase SQL Editor, run supabase/migrations/20260424220000_room_flow_stage_final.sql (adds final and updates set_room_flow_stage). Then Dashboard → Project Settings → API → Reload schema cache. Others in the room should still get results from the live broadcast if they are connected.`;
+  }
   if (/flow_stage|schema cache|column .* does not exist|does not exist.*flow_stage/i.test(reason)) {
     return `${head} Run SQL from supabase/migrations/20260423140000_ensure_rooms_flow_stage_column.sql (adds rooms.flow_stage). Then Supabase Dashboard → Project Settings → API → Reload schema.`;
   }
@@ -956,10 +963,10 @@ export function FoodMatchApp() {
     setRoomStage("final");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
+      broadcastRoomFlowEvent(supabase, roomId, "final_results_started");
       void persistRoomFlowStage(supabase, roomId, "final").then((r) => {
         if (!r.ok) setMessage(formatRoomFlowPersistUserMessage(r.reason));
       });
-      broadcastRoomFlowEvent(supabase, roomId, "final_results_started");
     }
   }, [isRoomHost, supabase, activeRoom?.id]);
 
