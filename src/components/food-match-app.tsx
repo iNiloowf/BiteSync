@@ -582,6 +582,8 @@ export function FoodMatchApp() {
       (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime(),
     );
   }, [activeRoom, roomMembers]);
+  const distinctRoomMembersRef = useRef(distinctRoomMembers);
+  distinctRoomMembersRef.current = distinctRoomMembers;
   const visibleCityRestaurants = useMemo(
     () => (activeRoom ? cityRestaurants : []),
     [activeRoom, cityRestaurants],
@@ -1663,26 +1665,25 @@ export function FoodMatchApp() {
         { event: "restaurants_started" },
         ({ payload }: { payload?: { member_keys?: unknown } }) => {
           if (!active) return;
-          void (async () => {
-            await (
-              client.from("room_restaurant_pass_complete") as unknown as RestaurantPassCompleteTable
-            )
-              .delete()
-              .eq("room_id", roomId);
-            if (!active) return;
-            setRestaurantFinishedMemberKeys([]);
-            const incoming = Array.isArray(payload?.member_keys)
-              ? payload.member_keys.filter((row): row is string => typeof row === "string" && row.trim().length > 0)
-              : [];
-            if (incoming.length > 0) {
-              setRestaurantRoundMemberKeys([...new Set(incoming.map((row) => row.trim()))]);
-            } else {
-              setRestaurantRoundMemberKeys(
-                [...new Set(distinctRoomMembers.map((member) => restaurantPassParticipantKey(member)))],
-              );
-            }
-            applyRemoteFlowStage("restaurants");
-          })();
+          setRestaurantFinishedMemberKeys([]);
+          const incoming = Array.isArray(payload?.member_keys)
+            ? payload.member_keys.filter((row): row is string => typeof row === "string" && row.trim().length > 0)
+            : [];
+          if (incoming.length > 0) {
+            setRestaurantRoundMemberKeys([...new Set(incoming.map((row) => row.trim()))]);
+          } else {
+            const members = distinctRoomMembersRef.current;
+            setRestaurantRoundMemberKeys(
+              [...new Set(members.map((member) => restaurantPassParticipantKey(member)))],
+            );
+          }
+          setRoomStage("restaurants");
+          void (
+            client.from("room_restaurant_pass_complete") as unknown as RestaurantPassCompleteTable
+          )
+            .delete()
+            .eq("room_id", roomId)
+            .catch(() => undefined);
         },
       )
       .subscribe();
@@ -1730,7 +1731,7 @@ export function FoodMatchApp() {
       void supabase.removeChannel(handshakeChannel);
       void supabase.removeChannel(channel);
     };
-  }, [activeRoom, supabase, screen, distinctRoomMembers]);
+  }, [activeRoom, supabase, screen]);
 
   useEffect(() => {
     if (!supabase || !activeRoom) {
