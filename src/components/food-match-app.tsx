@@ -3007,39 +3007,86 @@ function deliverySearchQuery(restaurant: CityRestaurant): string {
   return combined.length > 140 ? combined.slice(0, 137).trimEnd() + "…" : combined;
 }
 
+/** City segment for Skip (e.g. "Calgary, AB" → "calgary"). */
+function deliveryCityPathSlug(city: string): string {
+  const first = city.split(/[|,]/)[0]?.trim() ?? city.trim();
+  const s = first
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s.length > 0 ? s : "toronto";
+}
+
+/** DoorDash expects a hyphen slug in /search/store/{slug}/ — not a query-only URL. */
+function doordashStoreSlug(query: string): string {
+  const s = query
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+  return s.length > 0 ? s : "restaurant";
+}
+
+/**
+ * Uber Eats loads search via `next` (bare `/xx/search?q=` redirects away without applying q).
+ */
 function ubereatsSearchUrl(query: string, countryCode: string): string {
   const q = encodeURIComponent(query);
   const cc = countryCode.toUpperCase();
-  if (cc === "CA") return `https://www.ubereats.com/ca/search?q=${q}`;
-  if (cc === "GB" || cc === "UK") return `https://www.ubereats.com/gb/search?q=${q}`;
-  if (cc === "AU") return `https://www.ubereats.com/au/search?q=${q}`;
-  return `https://www.ubereats.com/search?q=${q}`;
+  if (cc === "CA") {
+    const next = encodeURIComponent("/ca/search");
+    return `https://www.ubereats.com/ca?next=${next}&q=${q}`;
+  }
+  if (cc === "GB" || cc === "UK") {
+    const next = encodeURIComponent("/gb/search");
+    return `https://www.ubereats.com/gb?next=${next}&q=${q}`;
+  }
+  if (cc === "AU") {
+    const next = encodeURIComponent("/au/search");
+    return `https://www.ubereats.com/au?next=${next}&q=${q}`;
+  }
+  return `https://www.ubereats.com/feed?q=${q}`;
 }
 
 function doordashSearchUrl(query: string, countryCode: string): string {
-  const q = encodeURIComponent(query);
+  const slug = doordashStoreSlug(query);
   const cc = countryCode.toUpperCase();
-  if (cc === "CA") return `https://www.doordash.com/en-CA/search?query=${q}`;
-  if (cc === "AU") return `https://www.doordash.com/en-AU/search?query=${q}`;
-  return `https://www.doordash.com/search?query=${q}`;
+  if (cc === "CA") return `https://www.doordash.com/en-CA/search/store/${slug}/?event_type=search`;
+  if (cc === "AU") return `https://www.doordash.com/en-AU/search/store/${slug}/?event_type=search`;
+  return `https://www.doordash.com/search/store/${slug}/?event_type=search`;
 }
 
-function skipthedishesSearchUrl(query: string): string {
-  return `https://www.skipthedishes.com/search?q=${encodeURIComponent(query)}`;
+/** Skip lists by city path; Canada only. */
+function skipthedishesSearchUrl(city: string, countryCode: string): string | null {
+  if (countryCode.toUpperCase() !== "CA") return null;
+  const cs = deliveryCityPathSlug(city);
+  return `https://www.skipthedishes.com/${cs}/restaurants`;
 }
 
-function DeliveryOrderLinks({ restaurant, countryCode }: { restaurant: CityRestaurant; countryCode: string }) {
+function DeliveryOrderLinks({
+  restaurant,
+  countryCode,
+  city,
+}: {
+  restaurant: CityRestaurant;
+  countryCode: string;
+  city: string;
+}) {
   const query = deliverySearchQuery(restaurant);
   const cc = countryCode?.trim() || "US";
   const ue = ubereatsSearchUrl(query, cc);
   const dd = doordashSearchUrl(query, cc);
-  const st = skipthedishesSearchUrl(query);
+  const st = skipthedishesSearchUrl(city, cc);
   const linkClass =
     "inline-flex min-h-[2.5rem] flex-1 items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2 text-center text-[11px] font-semibold leading-tight text-white/95 shadow-sm transition hover:brightness-[1.08] active:scale-[0.98] sm:text-xs";
   return (
     <div className="space-y-2">
       <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Order online</p>
-      <p className="text-[10px] leading-snug text-white/38">New tab — provider search for this spot.</p>
+      <p className="text-[10px] leading-snug text-white/38">New tab. Skip opens your room city list (Canada only).</p>
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
         <a
           href={ue}
@@ -3057,14 +3104,16 @@ function DeliveryOrderLinks({ restaurant, countryCode }: { restaurant: CityResta
         >
           DoorDash
         </a>
-        <a
-          href={st}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`${linkClass} border-orange-400/35 bg-orange-600/20 text-orange-50`}
-        >
-          SkipTheDishes
-        </a>
+        {st ? (
+          <a
+            href={st}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`${linkClass} border-orange-400/35 bg-orange-600/20 text-orange-50`}
+          >
+            SkipTheDishes
+          </a>
+        ) : null}
       </div>
     </div>
   );
@@ -3445,10 +3494,12 @@ const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
   restaurant,
   likedByLine,
   countryCode,
+  city,
 }: {
   restaurant: CityRestaurant;
   likedByLine?: string;
   countryCode: string;
+  city: string;
 }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const photos = restaurant.photoUrls ?? [];
@@ -3503,7 +3554,7 @@ const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
               <p className="mt-2 text-xs font-medium text-emerald-200/90">{likedByLine}</p>
             ) : null}
             <div className="mt-4">
-              <DeliveryOrderLinks restaurant={restaurant} countryCode={countryCode} />
+              <DeliveryOrderLinks restaurant={restaurant} countryCode={countryCode} city={city} />
             </div>
             {photos.length > 0 ? (
               <div className="mt-4 space-y-2">
@@ -3561,7 +3612,6 @@ const FinalResultPlaceCard = memo(function FinalResultPlaceCardInner({
           </div>
           {likedByLine ? <p className="text-xs font-medium text-emerald-200/90">{likedByLine}</p> : null}
           <p className="line-clamp-2 text-xs leading-relaxed text-white/55">{restaurant.address}</p>
-          <DeliveryOrderLinks restaurant={restaurant} countryCode={countryCode} />
           <button type="button" onClick={() => setDetailOpen(true)} className={finalResultDetailOpenButtonClass}>
             View detail
           </button>
@@ -3968,6 +4018,7 @@ function RoomScreen({
                       key={`mutual-${restaurant.id}`}
                       restaurant={restaurant}
                       countryCode={room?.country_code ?? "US"}
+                      city={room?.city ?? ""}
                     />
                   ))
                 ) : (
@@ -3990,6 +4041,7 @@ function RoomScreen({
                       restaurant={restaurant}
                       likedByLine={`Liked by ${likedByLabel}`}
                       countryCode={room?.country_code ?? "US"}
+                      city={room?.city ?? ""}
                     />
                   ))}
                 </div>
@@ -4008,6 +4060,7 @@ function RoomScreen({
                       restaurant={restaurant}
                       likedByLine={`Only ${likedByLabel}`}
                       countryCode={room?.country_code ?? "US"}
+                      city={room?.city ?? ""}
                     />
                   ))}
                 </div>
