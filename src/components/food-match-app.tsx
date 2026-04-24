@@ -770,13 +770,14 @@ export function FoodMatchApp() {
 
   const restaurantRoundExpectedMemberKeys = useMemo(() => {
     if (restaurantRoundMemberKeys.length > 0) return restaurantRoundMemberKeys;
-    return distinctRoomMembers.map((member) => roomMemberKey(member));
+    return [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
   }, [restaurantRoundMemberKeys, distinctRoomMembers]);
 
   const restaurantMembersByKey = useMemo(() => {
     const byKey = new Map<string, RoomMember>();
     for (const member of distinctRoomMembers) {
-      byKey.set(roomMemberKey(member), member);
+      const key = normalizedMemberNameKey(member.name);
+      if (!byKey.has(key)) byKey.set(key, member);
     }
     return byKey;
   }, [distinctRoomMembers]);
@@ -1278,7 +1279,9 @@ export function FoodMatchApp() {
 
   const handleHostStartRestaurantRound = useCallback(() => {
     if (!isRoomHost) return;
-    setRestaurantRoundMemberKeys(distinctRoomMembers.map((member) => roomMemberKey(member)));
+    setRestaurantRoundMemberKeys(
+      [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
+    );
     setRoomStage("restaurants");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
@@ -1936,7 +1939,7 @@ export function FoodMatchApp() {
   useEffect(() => {
     if (roomStage !== "restaurants") return;
     if (restaurantRoundMemberKeys.length > 0) return;
-    const keys = distinctRoomMembers.map((member) => roomMemberKey(member));
+    const keys = [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
     if (keys.length === 0) return;
     setRestaurantRoundMemberKeys(keys);
   }, [roomStage, restaurantRoundMemberKeys.length, distinctRoomMembers]);
