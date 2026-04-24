@@ -1169,7 +1169,7 @@ export function FoodMatchApp() {
     setMessage("");
 
     try {
-      const code = roomCodeInput.trim().toUpperCase();
+      const code = roomCodeInput.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
       const { data: roomData, error: roomError } = await getRoomsTable()
         .select("*")
         .eq("code", code)
@@ -2487,9 +2487,9 @@ function HomeScreen({
           <p className="text-sm text-white/58">Already have a room code?</p>
           <input
             value={roomCodeInput}
-            onChange={(event) => onRoomCodeChange(event.target.value.toUpperCase())}
+            onChange={(event) => onRoomCodeChange(event.target.value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase())}
             className={`${fieldClass} mt-4 text-center text-2xl font-semibold tracking-[0.24em]`}
-            placeholder="BSYN-204"
+            placeholder="BSYN204"
           />
           <button onClick={onJoin} disabled={submitting} className="mt-4 w-full rounded-full bg-white px-5 py-4 font-semibold text-stone-950">
             Join room
@@ -3812,7 +3812,7 @@ function getInitials(value: string) {
 function createRoomCode(city: string) {
   const cityCode = city.replace(/[^a-zA-Z]/g, "").slice(0, 4).toUpperCase() || "BSYN";
   const suffix = Math.floor(100 + Math.random() * 900);
-  return `${cityCode}-${suffix}`;
+  return `${cityCode}${suffix}`;
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
