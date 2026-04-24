@@ -257,38 +257,6 @@ function memberCategoryVotesSet(
   return progress.get(normalizedMemberNameKey(member.name));
 }
 
-function buildMemberRestaurantProgress(votes: readonly RoomRestaurantVote[]): Map<string, Set<string>> {
-  const map = new Map<string, Set<string>>();
-  for (const vote of votes) {
-    const primary = vote.user_id ? String(vote.user_id).trim() : normalizedMemberNameKey(vote.member_name);
-    if (!primary) continue;
-    let set = map.get(primary);
-    if (!set) {
-      set = new Set<string>();
-      map.set(primary, set);
-    }
-    set.add(vote.restaurant_id);
-    if (vote.user_id && vote.member_name?.trim()) {
-      const alt = normalizedMemberNameKey(vote.member_name);
-      if (alt !== primary) {
-        map.set(alt, set);
-      }
-    }
-  }
-  return map;
-}
-
-function memberRestaurantVotesSet(
-  member: RoomMember,
-  progress: ReadonlyMap<string, Set<string>>,
-): Set<string> | undefined {
-  if (member.user_id) {
-    const byId = progress.get(String(member.user_id).trim());
-    if (byId && byId.size > 0) return byId;
-  }
-  return progress.get(normalizedMemberNameKey(member.name));
-}
-
 type SupabaseBrowser = NonNullable<ReturnType<typeof getSupabaseBrowserClient>>;
 
 function mergeMemberRowsFromServer(serverRows: RoomMember[], previous: RoomMember[]): RoomMember[] {
@@ -338,9 +306,14 @@ function broadcastRoomMemberJoined(client: SupabaseBrowser, roomId: string, name
   });
 }
 
-type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started";
+type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started" | "restaurant_member_finished";
 
-function broadcastRoomFlowEvent(client: SupabaseBrowser, roomId: string, event: RoomFlowBroadcastEvent) {
+function broadcastRoomFlowEvent(
+  client: SupabaseBrowser,
+  roomId: string,
+  event: RoomFlowBroadcastEvent,
+  payload: Record<string, unknown> = {},
+) {
   const channel = client.channel(`room-handshake-${roomId}`);
   const teardown = () => {
     window.clearTimeout(failSafe);
@@ -353,7 +326,7 @@ function broadcastRoomFlowEvent(client: SupabaseBrowser, roomId: string, event: 
       void channel.send({
         type: "broadcast",
         event,
-        payload: {},
+        payload,
       });
       window.setTimeout(teardown, 1500);
     }
@@ -429,10 +402,12 @@ export function FoodMatchApp() {
   const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
   const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
   const [restaurantRoundMemberKeys, setRestaurantRoundMemberKeys] = useState<string[]>([]);
+  const [restaurantFinishedMemberKeys, setRestaurantFinishedMemberKeys] = useState<string[]>([]);
   const [swipePickLabel, setSwipePickLabel] = useState("");
   const [undoHidePlace, setUndoHidePlace] = useState<CityRestaurant | null>(null);
   const undoHidePlaceRef = useRef<CityRestaurant | null>(null);
   const undoHideTimerRef = useRef<number | null>(null);
+  const restaurantFinishBroadcastedRef = useRef(false);
 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -763,11 +738,6 @@ export function FoodMatchApp() {
     [myRestaurantVotes, restaurantCandidates],
   );
 
-  const memberRestaurantProgress = useMemo(
-    () => buildMemberRestaurantProgress(restaurantVotes),
-    [restaurantVotes],
-  );
-
   const restaurantRoundExpectedMemberKeys = useMemo(() => {
     if (restaurantRoundMemberKeys.length > 0) return restaurantRoundMemberKeys;
     return [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
@@ -782,62 +752,24 @@ export function FoodMatchApp() {
     return byKey;
   }, [distinctRoomMembers]);
 
-  const getRestaurantProgressCountForExpectedKey = useCallback(
-    (key: string) => {
-      const direct = memberRestaurantProgress.get(key);
-      if (direct) return direct.size;
-      const member = restaurantMembersByKey.get(key);
-      if (!member) return 0;
-      return memberRestaurantVotesSet(member, memberRestaurantProgress)?.size ?? 0;
-    },
-    [memberRestaurantProgress, restaurantMembersByKey],
+  const restaurantFinishedSet = useMemo(
+    () => new Set(restaurantFinishedMemberKeys),
+    [restaurantFinishedMemberKeys],
   );
-
-  const restaurantRoundCompletionTarget = useMemo(() => {
-    if (pendingRestaurants.length > 0) return 0;
-    const activeCounts = restaurantRoundExpectedMemberKeys
-      .map((key) => getRestaurantProgressCountForExpectedKey(key))
-      .filter((size) => size > 0);
-    if (activeCounts.length === 0) return 0;
-    return Math.min(...activeCounts);
-  }, [
-    pendingRestaurants.length,
-    restaurantRoundExpectedMemberKeys,
-    getRestaurantProgressCountForExpectedKey,
-  ]);
 
   const allMembersFinishedRestaurants = useMemo(() => {
     if (pendingRestaurants.length > 0) return false;
     if (restaurantRoundExpectedMemberKeys.length === 0) return memberCount <= 1;
-    if (restaurantRoundCompletionTarget <= 0) return false;
-    return restaurantRoundExpectedMemberKeys.every(
-      (key) => getRestaurantProgressCountForExpectedKey(key) >= restaurantRoundCompletionTarget,
-    );
-  }, [
-    pendingRestaurants.length,
-    memberCount,
-    restaurantRoundExpectedMemberKeys,
-    restaurantRoundCompletionTarget,
-    getRestaurantProgressCountForExpectedKey,
-  ]);
+    return restaurantRoundExpectedMemberKeys.every((key) => restaurantFinishedSet.has(key));
+  }, [pendingRestaurants.length, memberCount, restaurantRoundExpectedMemberKeys, restaurantFinishedSet]);
 
   const membersStillSwipingRestaurants = useMemo(() => {
     if (restaurantRoundExpectedMemberKeys.length === 0) return [] as RoomMember[];
-    if (restaurantRoundCompletionTarget <= 0) {
-      return restaurantRoundExpectedMemberKeys
-        .map((key) => restaurantMembersByKey.get(key))
-        .filter((member): member is RoomMember => Boolean(member));
-    }
     return restaurantRoundExpectedMemberKeys
-      .filter((key) => getRestaurantProgressCountForExpectedKey(key) < restaurantRoundCompletionTarget)
+      .filter((key) => !restaurantFinishedSet.has(key))
       .map((key) => restaurantMembersByKey.get(key))
       .filter((member): member is RoomMember => Boolean(member));
-  }, [
-    restaurantRoundExpectedMemberKeys,
-    restaurantRoundCompletionTarget,
-    restaurantMembersByKey,
-    getRestaurantProgressCountForExpectedKey,
-  ]);
+  }, [restaurantRoundExpectedMemberKeys, restaurantMembersByKey, restaurantFinishedSet]);
 
   const finalRestaurantIds = useMemo(
     () =>
@@ -881,6 +813,7 @@ export function FoodMatchApp() {
       setCategoryVotes([]);
       setRestaurantVotes([]);
       setRestaurantRoundMemberKeys([]);
+      setRestaurantFinishedMemberKeys([]);
       setSwipePickLabel("");
       setRoomStage("categories");
 
@@ -909,6 +842,7 @@ export function FoodMatchApp() {
       const roomId = activeRoom.id;
       setRestaurantVotes([]);
       setRestaurantRoundMemberKeys([]);
+      setRestaurantFinishedMemberKeys([]);
       setSwipePickLabel("");
       setRoomStage("restaurants");
 
@@ -1082,6 +1016,7 @@ export function FoodMatchApp() {
     setCategoryVotes([]);
     setRestaurantVotes([]);
     setRestaurantRoundMemberKeys([]);
+    setRestaurantFinishedMemberKeys([]);
   }
 
   async function handleSaveProfile() {
@@ -1204,6 +1139,7 @@ export function FoodMatchApp() {
       setCategoryVotes([]);
       setRestaurantVotes([]);
       setRestaurantRoundMemberKeys([]);
+      setRestaurantFinishedMemberKeys([]);
       setRoomMembers([]);
       setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
@@ -1247,6 +1183,7 @@ export function FoodMatchApp() {
       setCategoryVotes([]);
       setRestaurantVotes([]);
       setRestaurantRoundMemberKeys([]);
+      setRestaurantFinishedMemberKeys([]);
       setRoomMembers([]);
       setSwipePickLabel("");
       setActiveRoom(roomData as RoomRecord);
@@ -1282,6 +1219,8 @@ export function FoodMatchApp() {
     setRestaurantRoundMemberKeys(
       [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
     );
+    setRestaurantFinishedMemberKeys([]);
+    restaurantFinishBroadcastedRef.current = false;
     setRoomStage("restaurants");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
@@ -1681,8 +1620,23 @@ export function FoodMatchApp() {
       })
       .on("broadcast", { event: "restaurants_started" }, () => {
         if (!active) return;
+        setRestaurantFinishedMemberKeys([]);
+        restaurantFinishBroadcastedRef.current = false;
+        setRestaurantRoundMemberKeys(
+          [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
+        );
         applyRemoteFlowStage("restaurants");
       })
+      .on(
+        "broadcast",
+        { event: "restaurant_member_finished" },
+        ({ payload }: { payload?: { member_key?: string } }) => {
+          if (!active) return;
+          const memberKey = payload?.member_key?.trim();
+          if (!memberKey) return;
+          setRestaurantFinishedMemberKeys((prev) => (prev.includes(memberKey) ? prev : [...prev, memberKey]));
+        },
+      )
       .subscribe();
 
     const channel = supabase
@@ -1728,7 +1682,7 @@ export function FoodMatchApp() {
       void supabase.removeChannel(handshakeChannel);
       void supabase.removeChannel(channel);
     };
-  }, [activeRoom, supabase, screen]);
+  }, [activeRoom, supabase, screen, distinctRoomMembers]);
 
   useEffect(() => {
     if (!supabase || !activeRoom) {
@@ -1943,6 +1897,21 @@ export function FoodMatchApp() {
     if (keys.length === 0) return;
     setRestaurantRoundMemberKeys(keys);
   }, [roomStage, restaurantRoundMemberKeys.length, distinctRoomMembers]);
+
+  useEffect(() => {
+    if (roomStage !== "restaurants") return;
+    const myName = profile?.full_name?.trim();
+    if (!myName) return;
+    if (pendingRestaurants.length > 0) {
+      restaurantFinishBroadcastedRef.current = false;
+      return;
+    }
+    const memberKey = normalizedMemberNameKey(myName);
+    setRestaurantFinishedMemberKeys((prev) => (prev.includes(memberKey) ? prev : [...prev, memberKey]));
+    if (!supabase || !activeRoom?.id || restaurantFinishBroadcastedRef.current) return;
+    restaurantFinishBroadcastedRef.current = true;
+    broadcastRoomFlowEvent(supabase, activeRoom.id, "restaurant_member_finished", { member_key: memberKey });
+  }, [roomStage, pendingRestaurants.length, profile?.full_name, supabase, activeRoom?.id]);
 
   const restaurantFetchContextRef = useRef({
     roomStage,
@@ -2221,6 +2190,7 @@ export function FoodMatchApp() {
                   setScreen("home");
                   setRoomStage("lobby");
                   setRestaurantRoundMemberKeys([]);
+                  setRestaurantFinishedMemberKeys([]);
                 }}
               />
             ) : null}
