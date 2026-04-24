@@ -793,7 +793,7 @@ export function FoodMatchApp() {
       .map((key) => memberRestaurantProgress.get(key)?.size ?? 0)
       .filter((size) => size > 0);
     if (activeCounts.length === 0) return 0;
-    return Math.max(...activeCounts);
+    return Math.min(...activeCounts);
   }, [pendingRestaurants.length, myRestaurantVoteCount, restaurantRoundExpectedMemberKeys, memberRestaurantProgress]);
 
   const allMembersFinishedRestaurants = useMemo(() => {
