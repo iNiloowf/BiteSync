@@ -4298,6 +4298,9 @@ function SwipePanel<T>({
     [item, commit],
   );
 
+  const swipeTintMode = dragX > 10 ? "like" : dragX < -10 ? "pass" : "none";
+  const swipeTintStrength = swipeTintMode === "none" ? 0 : Math.min(1, Math.abs(dragX) / 130);
+
   return (
     <div className={fillHeight ? "flex min-h-0 flex-1 flex-col" : "space-y-4"}>
       <div
@@ -4334,14 +4337,37 @@ function SwipePanel<T>({
           <div className={`relative h-full ${fillHeight ? "min-h-0 px-0.5 sm:px-1" : ""}`}>
             <div
               className={`pointer-events-none absolute left-3 top-3 z-20 rounded-full border px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] transition-opacity sm:left-4 sm:top-4 sm:px-4 sm:py-2 sm:text-xs ${
-                dragX > 0
-                  ? "border-emerald-300/60 bg-emerald-300/25 text-emerald-100"
-                  : "border-rose-300/60 bg-rose-300/25 text-rose-100"
-              } ${Math.abs(dragX) > 18 ? "opacity-100" : "opacity-0"}`}
+                swipeTintMode === "like"
+                  ? "border-emerald-300/70 bg-emerald-400/30 text-emerald-50"
+                  : swipeTintMode === "pass"
+                    ? "border-rose-300/70 bg-rose-400/30 text-rose-50"
+                    : "border-white/15 bg-white/8 text-white/70"
+              } ${Math.abs(dragX) > 12 ? "opacity-100" : "opacity-0"}`}
             >
-              {dragX > 0 ? likeLabel : skipLabel}
+              {swipeTintMode === "like" ? likeLabel : swipeTintMode === "pass" ? skipLabel : likeLabel}
             </div>
-            {renderCard(item)}
+            <div className="relative z-[1] h-full min-h-0 flex flex-col">
+              {renderCard(item)}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 z-[12] rounded-[24px] sm:rounded-[28px]"
+                style={{
+                  opacity: swipeTintStrength,
+                  background:
+                    swipeTintMode === "like"
+                      ? "linear-gradient(160deg, rgba(52,211,153,0.42) 0%, rgba(16,185,129,0.14) 55%, rgba(5,150,105,0.08) 100%)"
+                      : swipeTintMode === "pass"
+                        ? "linear-gradient(160deg, rgba(251,113,133,0.45) 0%, rgba(248,113,113,0.16) 55%, rgba(185,28,28,0.1) 100%)"
+                        : "transparent",
+                  boxShadow:
+                    swipeTintMode === "like"
+                      ? `inset 0 0 0 3px rgba(52, 211, 153, ${0.35 + swipeTintStrength * 0.45})`
+                      : swipeTintMode === "pass"
+                        ? `inset 0 0 0 3px rgba(251, 113, 133, ${0.35 + swipeTintStrength * 0.45})`
+                        : "none",
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>
