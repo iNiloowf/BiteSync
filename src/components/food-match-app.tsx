@@ -29,6 +29,9 @@ type RoomStage =
   | "restaurants"
   | "final";
 
+/** Passed to `/api/restaurants?sort=` — see route `finalizeRestaurantOrder`. */
+type RestaurantSortMode = "relevance" | "balanced" | "rating" | "popular" | "discovery";
+
 type HiddenPlace = { id: string; name: string };
 
 type Profile = {
@@ -460,6 +463,7 @@ export function FoodMatchApp() {
   const [cityRestaurants, setCityRestaurants] = useState<CityRestaurant[]>([]);
   const [restaurantsLoading, setRestaurantsLoading] = useState(false);
   const [placesFetchNonce, setPlacesFetchNonce] = useState(0);
+  const [restaurantSort, setRestaurantSort] = useState<RestaurantSortMode>("balanced");
   const [roomStage, setRoomStage] = useState<RoomStage>("lobby");
   const [categoryVotes, setCategoryVotes] = useState<RoomCategoryVote[]>([]);
   const [restaurantVotes, setRestaurantVotes] = useState<RoomRestaurantVote[]>([]);
@@ -749,8 +753,16 @@ export function FoodMatchApp() {
           ? soloLikedCategoryIds
           : [];
 
-    return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}-${placesFetchNonce}`;
-  }, [activeRoom, roomStage, restaurantFocusCategoryIds, soloLikedCategoryIds, memberCount, placesFetchNonce]);
+    return `${activeRoom.id}-dining-${focusIds.join("|") || "all"}-${placesFetchNonce}-${restaurantSort}`;
+  }, [
+    activeRoom,
+    roomStage,
+    restaurantFocusCategoryIds,
+    soloLikedCategoryIds,
+    memberCount,
+    placesFetchNonce,
+    restaurantSort,
+  ]);
 
   const hiddenRestaurantIdSet = useMemo(
     () => new Set((profile?.hidden_restaurants ?? []).map((h) => h.id)),
@@ -2252,12 +2264,14 @@ export function FoodMatchApp() {
     restaurantFocusCategoryIds,
     soloLikedCategoryIds,
     memberCount,
+    sort: restaurantSort,
   });
   restaurantFetchContextRef.current = {
     roomStage,
     restaurantFocusCategoryIds,
     soloLikedCategoryIds,
     memberCount,
+    sort: restaurantSort,
   };
 
   useEffect(() => {
@@ -2288,6 +2302,7 @@ export function FoodMatchApp() {
           city: roomCity,
           country: roomCountry,
         });
+        params.set("sort", restaurantFetchContextRef.current.sort);
 
         if (enrich && focusIds.length > 0) {
           params.set("likedCategories", focusIds.join(","));
@@ -2316,6 +2331,7 @@ export function FoodMatchApp() {
             city: roomCity,
             country: roomCountry,
           });
+          fallbackParams.set("sort", restaurantFetchContextRef.current.sort);
           const fallbackRes = await fetch(`/api/restaurants?${fallbackParams.toString()}`, {
             signal: controller.signal,
           });
@@ -2518,9 +2534,12 @@ export function FoodMatchApp() {
                 onRestartCategories={handleHostRestartCategories}
                 onRestartRestaurants={handleHostRestartRestaurants}
                 onHideRestaurantForever={hasSupabaseEnv ? hideRestaurantForever : undefined}
+                restaurantSort={restaurantSort}
+                onRestaurantSortChange={setRestaurantSort}
                 onRetryPlaces={() => setPlacesFetchNonce((n) => n + 1)}
                 onBack={() => {
                   setSwipePickLabel("");
+                  setRestaurantSort("balanced");
                   setScreen("home");
                   setRoomStage("lobby");
                   setRestaurantRoundMemberKeys([]);
@@ -3627,6 +3646,8 @@ function RoomScreen({
   onRestartRestaurants,
   onHideRestaurantForever,
   onRetryPlaces,
+  restaurantSort,
+  onRestaurantSortChange,
   onBack,
 }: {
   room: RoomRecord | null;
@@ -3657,6 +3678,8 @@ function RoomScreen({
   onRestartRestaurants: () => void | Promise<void>;
   onHideRestaurantForever?: (restaurant: CityRestaurant) => void | Promise<void>;
   onRetryPlaces: () => void;
+  restaurantSort: RestaurantSortMode;
+  onRestaurantSortChange: (sort: RestaurantSortMode) => void;
   onBack: () => void;
 }) {
   const currentRestaurant = pendingRestaurants[0] ?? null;
@@ -3866,6 +3889,35 @@ function RoomScreen({
               </div>
             </div>
           ) : null}
+          <div className="shrink-0 space-y-1.5">
+            <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/40">Deck order</p>
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { id: "balanced" as const, label: "Mix" },
+                  { id: "rating" as const, label: "Top rated" },
+                  { id: "popular" as const, label: "Most reviewed" },
+                  { id: "discovery" as const, label: "New + mix" },
+                  { id: "relevance" as const, label: "Search order" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={restaurantsLoading}
+                  onClick={() => onRestaurantSortChange(opt.id)}
+                  className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition disabled:opacity-40 ${
+                    restaurantSort === opt.id
+                      ? "border-white/25 bg-white/18 text-white"
+                      : "border-white/12 bg-white/6 text-white/65 hover:bg-white/10"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[9px] leading-snug text-white/35">“New + mix” adds one Google search (no real open date).</p>
+          </div>
           <div className="flex shrink-0 items-center justify-end text-[10px] tabular-nums text-white/40">
             {pendingRestaurants.length} left
           </div>

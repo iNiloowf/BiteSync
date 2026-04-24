@@ -386,6 +386,104 @@ function mergeRoundRobin(buckets: NormalizedPlace[][], maxTotal: number): Normal
   return out;
 }
 
+function dedupePlacesById(places: NormalizedPlace[]): NormalizedPlace[] {
+  const seen = new Set<string>();
+  const out: NormalizedPlace[] = [];
+  for (const p of places) {
+    if (seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push(p);
+  }
+  return out;
+}
+
+function sortByRatingThenVolume(a: NormalizedPlace, b: NormalizedPlace): number {
+  const ra = a.rating ?? -1;
+  const rb = b.rating ?? -1;
+  if (rb !== ra) return rb - ra;
+  return (b.userRatingCount ?? 0) - (a.userRatingCount ?? 0);
+}
+
+function sortByVolumeThenRating(a: NormalizedPlace, b: NormalizedPlace): number {
+  const ca = a.userRatingCount ?? 0;
+  const cb = b.userRatingCount ?? 0;
+  if (cb !== ca) return cb - ca;
+  return (b.rating ?? 0) - (a.rating ?? 0);
+}
+
+/** Alternates “high stars” vs “many reviews” so the deck is not only one signal. */
+function interleaveRatingAndPopular(places: NormalizedPlace[], maxTotal: number): NormalizedPlace[] {
+  if (places.length === 0) return places;
+  const byRating = [...places].sort(sortByRatingThenVolume);
+  const byPopular = [...places].sort(sortByVolumeThenRating);
+  const seen = new Set<string>();
+  const out: NormalizedPlace[] = [];
+  let i = 0;
+  while (out.length < maxTotal && i < Math.max(byRating.length, byPopular.length)) {
+    for (const p of [byRating[i], byPopular[i]]) {
+      if (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        out.push(p);
+        if (out.length >= maxTotal) return out;
+      }
+    }
+    i += 1;
+  }
+  for (const p of places) {
+    if (out.length >= maxTotal) break;
+    if (!seen.has(p.id)) {
+      seen.add(p.id);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+type RestaurantSortMode = "relevance" | "balanced" | "rating" | "popular" | "discovery";
+
+async function finalizeRestaurantOrder(
+  places: NormalizedPlace[],
+  sort: RestaurantSortMode,
+  where: string,
+  regionCode: string | undefined,
+  searchOpts: SearchTextOptions,
+  maxTotal: number,
+): Promise<NormalizedPlace[]> {
+  let list = filterPlacesByTargetCountry(places, regionCode);
+  let discoveryHead: NormalizedPlace[] = [];
+
+  if (sort === "discovery") {
+    try {
+      const novel = await searchTextPlaces(`Recently opened new restaurants near ${where}`, 8, searchOpts);
+      discoveryHead = filterPlacesByTargetCountry(novel, regionCode).slice(0, 7);
+    } catch {
+      discoveryHead = [];
+    }
+    const headIds = new Set(discoveryHead.map((p) => p.id));
+    list = list.filter((p) => !headIds.has(p.id));
+  }
+
+  let orderedBody: NormalizedPlace[];
+  switch (sort) {
+    case "relevance":
+      orderedBody = [...list];
+      break;
+    case "rating":
+      orderedBody = [...list].sort(sortByRatingThenVolume);
+      break;
+    case "popular":
+      orderedBody = [...list].sort(sortByVolumeThenRating);
+      break;
+    case "balanced":
+    case "discovery":
+    default:
+      orderedBody = interleaveRatingAndPopular(list, maxTotal);
+      break;
+  }
+
+  return dedupePlacesById([...discoveryHead, ...orderedBody]).slice(0, maxTotal);
+}
+
 type SearchTextOptions = {
   regionCode?: string;
   /** Hard limit: only results inside this box (from Geocoding viewport for the user's city). */
@@ -445,6 +543,12 @@ export async function GET(request: Request) {
       ?.split(",")
       .map((part) => part.trim())
       .filter(Boolean) ?? [];
+
+  const sortParam = searchParams.get("sort");
+  const sort: RestaurantSortMode =
+    sortParam === "relevance" || sortParam === "rating" || sortParam === "popular" || sortParam === "discovery"
+      ? sortParam
+      : "balanced";
 
   if (!city || !country) {
     return NextResponse.json({ error: "City and country are required." }, { status: 400 });
@@ -523,6 +627,9 @@ export async function GET(request: Request) {
     }
 
     places = filterPlacesByTargetCountry(places, regionCode);
+
+    const maxPlaces = likedIds.length > 1 ? mergedMax : singleQueryLimit;
+    places = await finalizeRestaurantOrder(places, sort, where, regionCode, searchOpts, maxPlaces);
 
     return NextResponse.json({ places });
   } catch (error) {
