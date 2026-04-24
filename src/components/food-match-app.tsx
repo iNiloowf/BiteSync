@@ -166,6 +166,16 @@ type RestaurantVotesTable = {
   insert: (value: unknown) => Promise<{ error?: { message?: string } | null }>;
 };
 
+type RestaurantPassCompleteTable = {
+  upsert: (
+    value: { room_id: string; participant_key: string },
+    options?: { onConflict?: string },
+  ) => Promise<{ error?: { message?: string } | null }>;
+  delete: () => {
+    eq: (column: string, value: string) => Promise<{ error?: { message?: string } | null }>;
+  };
+};
+
 type ErrorLike = {
   message?: string;
   code?: string;
@@ -306,7 +316,7 @@ function broadcastRoomMemberJoined(client: SupabaseBrowser, roomId: string, name
   });
 }
 
-type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started" | "restaurant_member_finished";
+type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started";
 
 function broadcastRoomFlowEvent(
   client: SupabaseBrowser,
@@ -407,8 +417,6 @@ export function FoodMatchApp() {
   const [undoHidePlace, setUndoHidePlace] = useState<CityRestaurant | null>(null);
   const undoHidePlaceRef = useRef<CityRestaurant | null>(null);
   const undoHideTimerRef = useRef<number | null>(null);
-  const restaurantFinishBroadcastedRef = useRef(false);
-
   const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const getProfilesTable = useCallback(
@@ -433,6 +441,11 @@ export function FoodMatchApp() {
 
   const getRestaurantVotesTable = useCallback(
     () => supabase?.from("room_restaurant_votes") as unknown as RestaurantVotesTable,
+    [supabase],
+  );
+
+  const getRestaurantPassCompleteTable = useCallback(
+    () => supabase?.from("room_restaurant_pass_complete") as unknown as RestaurantPassCompleteTable,
     [supabase],
   );
 
@@ -826,6 +839,11 @@ export function FoodMatchApp() {
         .eq("room_id", roomId);
       if (restaurantDeleteError) throw restaurantDeleteError;
 
+      const passComplete = getRestaurantPassCompleteTable();
+      if (passComplete) {
+        await passComplete.delete().eq("room_id", roomId);
+      }
+
       const persistResult = await persistRoomFlowStage(supabase, roomId, "categories");
       if (!persistResult.ok) {
         setMessage(formatRoomFlowPersistUserMessage(persistResult.reason));
@@ -834,7 +852,7 @@ export function FoodMatchApp() {
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not restart category round."));
     }
-  }, [supabase, activeRoom, isRoomHost]);
+  }, [supabase, activeRoom, isRoomHost, getRestaurantPassCompleteTable]);
 
   const handleHostRestartRestaurants = useCallback(async () => {
     if (!supabase || !activeRoom || !isRoomHost) return;
@@ -852,6 +870,11 @@ export function FoodMatchApp() {
         .eq("room_id", roomId);
       if (restaurantDeleteError) throw restaurantDeleteError;
 
+      const passComplete = getRestaurantPassCompleteTable();
+      if (passComplete) {
+        await passComplete.delete().eq("room_id", roomId);
+      }
+
       const persistResult = await persistRoomFlowStage(supabase, roomId, "restaurants");
       if (!persistResult.ok) {
         setMessage(formatRoomFlowPersistUserMessage(persistResult.reason));
@@ -860,7 +883,7 @@ export function FoodMatchApp() {
     } catch (error) {
       setMessage(getErrorMessage(error, "Could not restart restaurant round."));
     }
-  }, [supabase, activeRoom, isRoomHost]);
+  }, [supabase, activeRoom, isRoomHost, getRestaurantPassCompleteTable]);
 
   const loadProfile = useCallback(
     async (user: User) => {
@@ -1216,22 +1239,23 @@ export function FoodMatchApp() {
 
   const handleHostStartRestaurantRound = useCallback(() => {
     if (!isRoomHost) return;
-    setRestaurantRoundMemberKeys(
-      [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
-    );
+    const memberKeys = [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))];
+    setRestaurantRoundMemberKeys(memberKeys);
     setRestaurantFinishedMemberKeys([]);
-    restaurantFinishBroadcastedRef.current = false;
     setRoomStage("restaurants");
     const roomId = activeRoom?.id;
     if (supabase && roomId) {
-      void persistRoomFlowStage(supabase, roomId, "restaurants").then((r) => {
+      void (async () => {
+        const passComplete = getRestaurantPassCompleteTable();
+        if (passComplete) {
+          await passComplete.delete().eq("room_id", roomId);
+        }
+        const r = await persistRoomFlowStage(supabase, roomId, "restaurants");
         if (!r.ok) setMessage(formatRoomFlowPersistUserMessage(r.reason));
-      });
-      broadcastRoomFlowEvent(supabase, roomId, "restaurants_started", {
-        member_keys: [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
-      });
+        broadcastRoomFlowEvent(supabase, roomId, "restaurants_started", { member_keys: memberKeys });
+      })();
     }
-  }, [isRoomHost, distinctRoomMembers, supabase, activeRoom?.id]);
+  }, [isRoomHost, distinctRoomMembers, supabase, activeRoom?.id, getRestaurantPassCompleteTable]);
 
   async function handleCategoryBatchSubmit(likeIds: readonly string[]) {
     if (!supabase || !activeRoom || !profile || !currentUserId) return;
@@ -1625,29 +1649,26 @@ export function FoodMatchApp() {
         { event: "restaurants_started" },
         ({ payload }: { payload?: { member_keys?: unknown } }) => {
           if (!active) return;
-          setRestaurantFinishedMemberKeys([]);
-          restaurantFinishBroadcastedRef.current = false;
-          const incoming = Array.isArray(payload?.member_keys)
-            ? payload.member_keys.filter((row): row is string => typeof row === "string" && row.trim().length > 0)
-            : [];
-          if (incoming.length > 0) {
-            setRestaurantRoundMemberKeys([...new Set(incoming.map((row) => row.trim()))]);
-          } else {
-            setRestaurantRoundMemberKeys(
-              [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
-            );
-          }
-          applyRemoteFlowStage("restaurants");
-        },
-      )
-      .on(
-        "broadcast",
-        { event: "restaurant_member_finished" },
-        ({ payload }: { payload?: { member_key?: string } }) => {
-          if (!active) return;
-          const memberKey = payload?.member_key?.trim();
-          if (!memberKey) return;
-          setRestaurantFinishedMemberKeys((prev) => (prev.includes(memberKey) ? prev : [...prev, memberKey]));
+          void (async () => {
+            await (
+              client.from("room_restaurant_pass_complete") as unknown as RestaurantPassCompleteTable
+            )
+              .delete()
+              .eq("room_id", roomId);
+            if (!active) return;
+            setRestaurantFinishedMemberKeys([]);
+            const incoming = Array.isArray(payload?.member_keys)
+              ? payload.member_keys.filter((row): row is string => typeof row === "string" && row.trim().length > 0)
+              : [];
+            if (incoming.length > 0) {
+              setRestaurantRoundMemberKeys([...new Set(incoming.map((row) => row.trim()))]);
+            } else {
+              setRestaurantRoundMemberKeys(
+                [...new Set(distinctRoomMembers.map((member) => normalizedMemberNameKey(member.name)))],
+              );
+            }
+            applyRemoteFlowStage("restaurants");
+          })();
         },
       )
       .subscribe();
@@ -1772,8 +1793,20 @@ export function FoodMatchApp() {
       setRestaurantVotes((prev) => mergeRestaurantVotesFromServer(rows, prev));
     }
 
+    async function loadRestaurantPassComplete() {
+      const { data, error } = await client
+        .from("room_restaurant_pass_complete")
+        .select("participant_key")
+        .eq("room_id", roomId);
+      if (!active) return;
+      if (error) return;
+      const keys = ((data as { participant_key: string }[] | null) ?? []).map((row) => row.participant_key);
+      setRestaurantFinishedMemberKeys([...new Set(keys)]);
+    }
+
     void loadCategoryVotes();
     void loadRestaurantVotes();
+    void loadRestaurantPassComplete();
 
     let categoryReloadTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleCategoryVotesReload = () => {
@@ -1812,6 +1845,18 @@ export function FoodMatchApp() {
         },
         () => {
           void loadRestaurantVotes();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "room_restaurant_pass_complete",
+          filter: `room_id=eq.${roomId}`,
+        },
+        () => {
+          void loadRestaurantPassComplete();
         },
       )
       .subscribe();
@@ -1915,16 +1960,30 @@ export function FoodMatchApp() {
     if (roomStage !== "restaurants") return;
     const myName = profile?.full_name?.trim();
     if (!myName) return;
-    if (pendingRestaurants.length > 0) {
-      restaurantFinishBroadcastedRef.current = false;
-      return;
-    }
+    if (pendingRestaurants.length > 0) return;
     const memberKey = normalizedMemberNameKey(myName);
     setRestaurantFinishedMemberKeys((prev) => (prev.includes(memberKey) ? prev : [...prev, memberKey]));
-    if (!supabase || !activeRoom?.id || restaurantFinishBroadcastedRef.current) return;
-    restaurantFinishBroadcastedRef.current = true;
-    broadcastRoomFlowEvent(supabase, activeRoom.id, "restaurant_member_finished", { member_key: memberKey });
-  }, [roomStage, pendingRestaurants.length, profile?.full_name, supabase, activeRoom?.id]);
+    if (!supabase || !activeRoom?.id) return;
+    const passComplete = getRestaurantPassCompleteTable();
+    if (!passComplete) return;
+    void passComplete
+      .upsert(
+        { room_id: activeRoom.id, participant_key: memberKey },
+        { onConflict: "room_id,participant_key" },
+      )
+      .then(({ error }) => {
+        if (error && /relation|does not exist|schema cache/i.test(error.message ?? "")) {
+          /* migration not applied yet */
+        }
+      });
+  }, [
+    roomStage,
+    pendingRestaurants.length,
+    profile?.full_name,
+    supabase,
+    activeRoom?.id,
+    getRestaurantPassCompleteTable,
+  ]);
 
   const restaurantFetchContextRef = useRef({
     roomStage,
