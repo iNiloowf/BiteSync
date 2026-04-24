@@ -54,7 +54,7 @@ function profileFromDbRow(row: Record<string, unknown>): Profile {
   };
 }
 
-type RoomSyncFlowStage = "lobby" | "categories" | "restaurants";
+type RoomSyncFlowStage = "lobby" | "categories" | "restaurants" | "final";
 
 type RoomRecord = {
   id: string;
@@ -66,7 +66,7 @@ type RoomRecord = {
 };
 
 function isRoomSyncFlowStage(value: string): value is RoomSyncFlowStage {
-  return value === "lobby" || value === "categories" || value === "restaurants";
+  return value === "lobby" || value === "categories" || value === "restaurants" || value === "final";
 }
 
 function nextRoomStageFromSyncedFlow(current: RoomStage, synced: RoomSyncFlowStage): RoomStage | null {
@@ -83,6 +83,10 @@ function nextRoomStageFromSyncedFlow(current: RoomStage, synced: RoomSyncFlowSta
     ) {
       return "restaurants";
     }
+    return null;
+  }
+  if (synced === "final") {
+    if (current === "restaurants" || current === "final") return "final";
     return null;
   }
   return null;
@@ -345,7 +349,7 @@ function broadcastRoomMemberJoined(client: SupabaseBrowser, roomId: string, name
   });
 }
 
-type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started";
+type RoomFlowBroadcastEvent = "categories_started" | "restaurants_started" | "final_results_started";
 
 function broadcastRoomFlowEvent(
   client: SupabaseBrowser,
@@ -621,6 +625,14 @@ export function FoodMatchApp() {
     return Math.max(distinctNames.size, 1);
   }, [distinctRoomMembers]);
 
+  /** Same keys as restaurant votes / pass-complete; avoids inflated memberCount when roster is incomplete. */
+  const restaurantConsensusMemberCount = useMemo(() => {
+    const keys = new Set(distinctRoomMembers.map((m) => restaurantPassParticipantKey(m)));
+    const n = keys.size;
+    if (n >= 2) return n;
+    return memberCount;
+  }, [distinctRoomMembers, memberCount]);
+
   const myCategoryVotes = useMemo(
     () =>
       categoryVotes.filter(
@@ -816,21 +828,21 @@ export function FoodMatchApp() {
   }, [restaurantRoundExpectedMemberKeys, restaurantMembersByPassKey, restaurantFinishedSet]);
 
   const strictMutualRestaurantIds = useMemo(() => {
-    if (memberCount <= 1) return [] as string[];
+    if (restaurantConsensusMemberCount <= 1) return [] as string[];
     return getSharedLikedIds({
       votes: restaurantVotes,
       itemKey: "restaurant_id",
-      memberCount,
+      memberCount: restaurantConsensusMemberCount,
       fallbackVotes: myRestaurantVotes,
     });
-  }, [memberCount, myRestaurantVotes, restaurantVotes]);
+  }, [restaurantConsensusMemberCount, myRestaurantVotes, restaurantVotes]);
 
   const finalRestaurantIds = useMemo(() => {
-    if (memberCount <= 1) {
+    if (restaurantConsensusMemberCount <= 1) {
       return getSharedLikedIds({
         votes: restaurantVotes,
         itemKey: "restaurant_id",
-        memberCount,
+        memberCount: restaurantConsensusMemberCount,
         fallbackVotes: myRestaurantVotes,
       });
     }
@@ -842,7 +854,7 @@ export function FoodMatchApp() {
       if (v.decision === "like") union.add(v.restaurant_id);
     }
     return [...union];
-  }, [memberCount, myRestaurantVotes, restaurantVotes, strictMutualRestaurantIds]);
+  }, [restaurantConsensusMemberCount, myRestaurantVotes, restaurantVotes, strictMutualRestaurantIds]);
 
   const restaurantDisplayPool = useMemo(() => {
     const byId = new Map<string, CityRestaurant>();
@@ -878,7 +890,7 @@ export function FoodMatchApp() {
   }, [restaurantVotes]);
 
   const mutualFinalRestaurants = useMemo(() => {
-    if (memberCount <= 1) {
+    if (restaurantConsensusMemberCount <= 1) {
       return finalRestaurantIds
         .map((id) => restaurantByIdLookup.get(id))
         .filter((r): r is CityRestaurant => Boolean(r))
@@ -888,16 +900,16 @@ export function FoodMatchApp() {
       .map((id) => restaurantByIdLookup.get(id))
       .filter((r): r is CityRestaurant => Boolean(r))
       .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
-  }, [memberCount, finalRestaurantIds, strictMutualRestaurantIds, restaurantByIdLookup]);
+  }, [restaurantConsensusMemberCount, finalRestaurantIds, strictMutualRestaurantIds, restaurantByIdLookup]);
 
   const partialCoLikedFinalRows = useMemo(() => {
-    if (memberCount <= 1) return [] as { restaurant: CityRestaurant; likedByLabel: string }[];
+    if (restaurantConsensusMemberCount <= 1) return [] as { restaurant: CityRestaurant; likedByLabel: string }[];
     const rows: { restaurant: CityRestaurant; likedByLabel: string }[] = [];
     const mutualIds = new Set(strictMutualRestaurantIds);
     for (const [id, likers] of restaurantLikeBreakdown) {
       if (mutualIds.has(id)) continue;
       const c = likers.size;
-      if (c < 2 || c >= memberCount) continue;
+      if (c < 2 || c >= restaurantConsensusMemberCount) continue;
       const r = restaurantByIdLookup.get(id);
       if (!r) continue;
       const names = [...likers].map((key) => displayNameForRestaurantVoterKey(key, distinctRoomMembers));
@@ -906,10 +918,16 @@ export function FoodMatchApp() {
     }
     rows.sort((a, b) => (b.restaurant.rating ?? 0) - (a.restaurant.rating ?? 0));
     return rows;
-  }, [memberCount, strictMutualRestaurantIds, restaurantLikeBreakdown, restaurantByIdLookup, distinctRoomMembers]);
+  }, [
+    restaurantConsensusMemberCount,
+    strictMutualRestaurantIds,
+    restaurantLikeBreakdown,
+    restaurantByIdLookup,
+    distinctRoomMembers,
+  ]);
 
   const soloLikedFinalRows = useMemo(() => {
-    if (memberCount <= 1) return [] as { restaurant: CityRestaurant; likedByLabel: string }[];
+    if (restaurantConsensusMemberCount <= 1) return [] as { restaurant: CityRestaurant; likedByLabel: string }[];
     const rows: { restaurant: CityRestaurant; likedByLabel: string }[] = [];
     const mutualIds = new Set(strictMutualRestaurantIds);
     for (const [id, likers] of restaurantLikeBreakdown) {
@@ -925,12 +943,25 @@ export function FoodMatchApp() {
     }
     rows.sort((a, b) => (b.restaurant.rating ?? 0) - (a.restaurant.rating ?? 0));
     return rows;
-  }, [memberCount, strictMutualRestaurantIds, restaurantLikeBreakdown, restaurantByIdLookup, distinctRoomMembers]);
+  }, [
+    restaurantConsensusMemberCount,
+    strictMutualRestaurantIds,
+    restaurantLikeBreakdown,
+    restaurantByIdLookup,
+    distinctRoomMembers,
+  ]);
 
   const handleHostShowFinalResults = useCallback(() => {
     if (!isRoomHost) return;
     setRoomStage("final");
-  }, [isRoomHost]);
+    const roomId = activeRoom?.id;
+    if (supabase && roomId) {
+      void persistRoomFlowStage(supabase, roomId, "final").then((r) => {
+        if (!r.ok) setMessage(formatRoomFlowPersistUserMessage(r.reason));
+      });
+      broadcastRoomFlowEvent(supabase, roomId, "final_results_started");
+    }
+  }, [isRoomHost, supabase, activeRoom?.id]);
 
   const handleHostRestartCategories = useCallback(async () => {
     if (!supabase || !activeRoom || !isRoomHost) return;
@@ -1758,6 +1789,10 @@ export function FoodMatchApp() {
         if (!active) return;
         setRoomStage("categories");
       })
+      .on("broadcast", { event: "final_results_started" }, () => {
+        if (!active) return;
+        setRoomStage("final");
+      })
       .on(
         "broadcast",
         { event: "restaurants_started" },
@@ -2148,6 +2183,50 @@ export function FoodMatchApp() {
       window.clearInterval(intervalId);
     };
   }, [supabase, activeRoom, roomStage, memberCount]);
+
+  useEffect(() => {
+    if (!supabase || !activeRoom || roomStage !== "final") {
+      return;
+    }
+    const client = supabase;
+    const roomId = activeRoom.id;
+    let cancelled = false;
+
+    void (async () => {
+      const primary = await client
+        .from("room_restaurant_votes")
+        .select("id,user_id,restaurant_id,decision,member_name")
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: true });
+      if (cancelled) return;
+
+      if (primary.error) {
+        if (isMissingColumnError(primary.error, "user_id")) {
+          const legacy = await client
+            .from("room_restaurant_votes")
+            .select("id,restaurant_id,decision,member_name")
+            .eq("room_id", roomId)
+            .order("created_at", { ascending: true });
+          if (cancelled || legacy.error) return;
+          const rows = (legacy.data as Omit<RoomRestaurantVote, "user_id">[] | null) ?? [];
+          setRestaurantVotes((prev) =>
+            mergeRestaurantVotesFromServer(
+              rows.map((row) => ({ ...row, user_id: null })),
+              prev,
+            ),
+          );
+        }
+        return;
+      }
+
+      const rows = ((primary.data as RoomRestaurantVote[] | null) ?? []).filter(Boolean);
+      setRestaurantVotes((prev) => mergeRestaurantVotesFromServer(rows, prev));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, activeRoom, roomStage]);
 
   const restaurantFetchContextRef = useRef({
     roomStage,
