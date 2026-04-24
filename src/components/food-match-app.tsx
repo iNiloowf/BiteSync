@@ -1620,8 +1620,6 @@ export function FoodMatchApp() {
         if (!active) return;
         setRoomStage("categories");
       })
-      .on("broadcast", { event: "restaurants_started" }, () => {
-        if (!active) return;
       .on(
         "broadcast",
         { event: "restaurants_started" },
