@@ -781,11 +781,6 @@ export function FoodMatchApp() {
     return byKey;
   }, [distinctRoomMembers]);
 
-  const myRestaurantVoteCount = useMemo(() => {
-    const ids = new Set(myRestaurantVotes.map((vote) => vote.restaurant_id));
-    return ids.size;
-  }, [myRestaurantVotes]);
-
   const getRestaurantProgressCountForExpectedKey = useCallback(
     (key: string) => {
       const direct = memberRestaurantProgress.get(key);
@@ -799,7 +794,6 @@ export function FoodMatchApp() {
 
   const restaurantRoundCompletionTarget = useMemo(() => {
     if (pendingRestaurants.length > 0) return 0;
-    if (myRestaurantVoteCount > 0) return myRestaurantVoteCount;
     const activeCounts = restaurantRoundExpectedMemberKeys
       .map((key) => getRestaurantProgressCountForExpectedKey(key))
       .filter((size) => size > 0);
@@ -807,7 +801,6 @@ export function FoodMatchApp() {
     return Math.min(...activeCounts);
   }, [
     pendingRestaurants.length,
-    myRestaurantVoteCount,
     restaurantRoundExpectedMemberKeys,
     getRestaurantProgressCountForExpectedKey,
   ]);
