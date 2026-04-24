@@ -786,29 +786,45 @@ export function FoodMatchApp() {
     return ids.size;
   }, [myRestaurantVotes]);
 
+  const getRestaurantProgressCountForExpectedKey = useCallback(
+    (key: string) => {
+      const direct = memberRestaurantProgress.get(key);
+      if (direct) return direct.size;
+      const member = restaurantMembersByKey.get(key);
+      if (!member) return 0;
+      return memberRestaurantVotesSet(member, memberRestaurantProgress)?.size ?? 0;
+    },
+    [memberRestaurantProgress, restaurantMembersByKey],
+  );
+
   const restaurantRoundCompletionTarget = useMemo(() => {
     if (pendingRestaurants.length > 0) return 0;
     if (myRestaurantVoteCount > 0) return myRestaurantVoteCount;
     const activeCounts = restaurantRoundExpectedMemberKeys
-      .map((key) => memberRestaurantProgress.get(key)?.size ?? 0)
+      .map((key) => getRestaurantProgressCountForExpectedKey(key))
       .filter((size) => size > 0);
     if (activeCounts.length === 0) return 0;
     return Math.min(...activeCounts);
-  }, [pendingRestaurants.length, myRestaurantVoteCount, restaurantRoundExpectedMemberKeys, memberRestaurantProgress]);
+  }, [
+    pendingRestaurants.length,
+    myRestaurantVoteCount,
+    restaurantRoundExpectedMemberKeys,
+    getRestaurantProgressCountForExpectedKey,
+  ]);
 
   const allMembersFinishedRestaurants = useMemo(() => {
     if (pendingRestaurants.length > 0) return false;
     if (restaurantRoundExpectedMemberKeys.length === 0) return memberCount <= 1;
     if (restaurantRoundCompletionTarget <= 0) return false;
     return restaurantRoundExpectedMemberKeys.every(
-      (key) => (memberRestaurantProgress.get(key)?.size ?? 0) >= restaurantRoundCompletionTarget,
+      (key) => getRestaurantProgressCountForExpectedKey(key) >= restaurantRoundCompletionTarget,
     );
   }, [
     pendingRestaurants.length,
     memberCount,
     restaurantRoundExpectedMemberKeys,
     restaurantRoundCompletionTarget,
-    memberRestaurantProgress,
+    getRestaurantProgressCountForExpectedKey,
   ]);
 
   const membersStillSwipingRestaurants = useMemo(() => {
@@ -819,14 +835,14 @@ export function FoodMatchApp() {
         .filter((member): member is RoomMember => Boolean(member));
     }
     return restaurantRoundExpectedMemberKeys
-      .filter((key) => (memberRestaurantProgress.get(key)?.size ?? 0) < restaurantRoundCompletionTarget)
+      .filter((key) => getRestaurantProgressCountForExpectedKey(key) < restaurantRoundCompletionTarget)
       .map((key) => restaurantMembersByKey.get(key))
       .filter((member): member is RoomMember => Boolean(member));
   }, [
     restaurantRoundExpectedMemberKeys,
     restaurantRoundCompletionTarget,
-    memberRestaurantProgress,
     restaurantMembersByKey,
+    getRestaurantProgressCountForExpectedKey,
   ]);
 
   const finalRestaurantIds = useMemo(
