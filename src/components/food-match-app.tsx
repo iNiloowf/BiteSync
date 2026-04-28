@@ -86,7 +86,7 @@ function isRoomSyncFlowStage(value: string): value is RoomSyncFlowStage {
 
 function nextRoomStageFromSyncedFlow(current: RoomStage, synced: RoomSyncFlowStage): RoomStage | null {
   if (synced === "categories") {
-    if (current === "lobby") return "categories";
+    if (current !== "categories") return "categories";
     return null;
   }
   if (synced === "restaurants") {
