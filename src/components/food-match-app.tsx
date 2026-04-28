@@ -616,12 +616,21 @@ export function FoodMatchApp() {
   const visibleRoomMembers = activeRoom ? roomMembers : [];
   const distinctRoomMembers = useMemo(() => {
     if (!activeRoom) return [] as RoomMember[];
-    const byKey = new Map<string, RoomMember>();
+    const byName = new Map<string, RoomMember>();
     for (const member of roomMembers) {
-      const k = roomMemberKey(member);
-      if (!byKey.has(k)) byKey.set(k, member);
+      const nameKey = normalizedMemberNameKey(member.name);
+      const existing = byName.get(nameKey);
+      if (!existing) {
+        byName.set(nameKey, member);
+        continue;
+      }
+      // Prefer rows with user_id to avoid double-counting same person
+      // when legacy null-user_id rows still exist for that name.
+      if (!existing.user_id && member.user_id) {
+        byName.set(nameKey, member);
+      }
     }
-    return [...byKey.values()].sort(
+    return [...byName.values()].sort(
       (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime(),
     );
   }, [activeRoom, roomMembers]);
