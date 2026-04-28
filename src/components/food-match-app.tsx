@@ -315,6 +315,23 @@ function memberCategoryVotesSet(
   return progress.get(normalizedMemberNameKey(member.name));
 }
 
+function countCompletedCategoryVoters(votes: readonly RoomCategoryVote[], categoryDeckSize: number): number {
+  if (categoryDeckSize <= 0) return 0;
+  const byVoter = new Map<string, Set<string>>();
+  for (const vote of votes) {
+    const voterKey = categoryVoteKey(vote);
+    if (!voterKey) continue;
+    const set = byVoter.get(voterKey) ?? new Set<string>();
+    set.add(vote.category_id);
+    byVoter.set(voterKey, set);
+  }
+  let complete = 0;
+  for (const set of byVoter.values()) {
+    if (set.size >= categoryDeckSize) complete += 1;
+  }
+  return complete;
+}
+
 type SupabaseBrowser = NonNullable<ReturnType<typeof getSupabaseBrowserClient>>;
 
 function mergeMemberRowsFromServer(serverRows: RoomMember[], previous: RoomMember[]): RoomMember[] {
@@ -701,16 +718,21 @@ export function FoodMatchApp() {
   const categoryDeckSize = categories.length;
 
   const memberCategoryProgress = useMemo(() => buildMemberCategoryProgress(categoryVotes), [categoryVotes]);
+  const completedCategoryVoterCount = useMemo(
+    () => countCompletedCategoryVoters(categoryVotes, categoryDeckSize),
+    [categoryVotes, categoryDeckSize],
+  );
 
   const allMembersFinishedCategories = useMemo(() => {
     if (memberCount <= 1) return true;
+    if (completedCategoryVoterCount >= memberCount) return true;
     if (distinctRoomMembers.length === 0) return false;
     for (const member of distinctRoomMembers) {
       const set = memberCategoryVotesSet(member, memberCategoryProgress);
       if (!set || set.size < categoryDeckSize) return false;
     }
     return true;
-  }, [memberCount, distinctRoomMembers, memberCategoryProgress, categoryDeckSize]);
+  }, [memberCount, completedCategoryVoterCount, distinctRoomMembers, memberCategoryProgress, categoryDeckSize]);
 
   const membersStillSwipingCategories = useMemo(() => {
     if (memberCount <= 1) return [] as RoomMember[];
@@ -2096,6 +2118,7 @@ export function FoodMatchApp() {
         setCategoryVotes((prev) => mergeCategoryVotesFromServer(rows, prev));
       })();
     };
+    poll();
     const pollId = window.setInterval(poll, 2500);
     return () => window.clearInterval(pollId);
   }, [activeRoom, supabase, roomStage]);
@@ -2105,14 +2128,23 @@ export function FoodMatchApp() {
       return;
     }
     if (memberCount <= 1) {
-      setRoomStage("restaurants");
+      setRoomStage("category_match");
       return;
     }
-    if (!allMembersFinishedCategories) {
+    const bothDone = completedCategoryVoterCount >= 2 && completedCategoryVoterCount >= memberCount;
+    if (bothDone || allMembersFinishedCategories) {
+      setRoomStage("category_match");
       return;
     }
-    setRoomStage("category_match");
-  }, [roomStage, allMembersFinishedCategories, memberCount]);
+    const fallbackId = window.setTimeout(() => {
+      if (completedCategoryVoterCount >= 2 && completedCategoryVoterCount >= memberCount) {
+        setRoomStage("category_match");
+      }
+    }, 1200);
+    return () => {
+      window.clearTimeout(fallbackId);
+    };
+  }, [roomStage, allMembersFinishedCategories, completedCategoryVoterCount, memberCount]);
 
   useEffect(() => {
     if (roomStage !== "category_match") {
